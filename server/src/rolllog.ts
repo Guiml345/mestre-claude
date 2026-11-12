@@ -15,11 +15,14 @@ export interface RollLogEntry {
   secreta: boolean;
 }
 
-/** Grava cada rolagem em campanha/rolagens.jsonl, uma por linha, para conferência depois. */
-export function createRollLogger(campaignDir: string): (entry: RollLogEntry) => Promise<void> {
-  const file = path.join(campaignDir, "rolagens.jsonl");
+/**
+ * Grava cada rolagem em <pasta da campanha>/rolagens.jsonl, uma por linha.
+ * A pasta é decidida a cada rolagem, para valer a campanha ativa no momento.
+ */
+export function createRollLogger(campaignDir: string | (() => Promise<string>)): (entry: RollLogEntry) => Promise<void> {
   return async (entry) => {
-    await mkdir(campaignDir, { recursive: true });
-    await appendFile(file, `${JSON.stringify(entry)}\n`, "utf8");
+    const dir = typeof campaignDir === "string" ? campaignDir : await campaignDir();
+    await mkdir(dir, { recursive: true });
+    await appendFile(path.join(dir, "rolagens.jsonl"), `${JSON.stringify(entry)}\n`, "utf8");
   };
 }

@@ -48,6 +48,7 @@ Fale com o Claude normalmente: "como está a mesa?", "move o goblin para o lado 
 | `editar_token` | Muda o rótulo ou esconde/revela um token |
 | `rolar` | Rola dados, julga contra CD/CA pelas regras do D&D 5.5 e mostra na mesa |
 | `anunciar` | Mostra um aviso curto na tela da mesa |
+| `campanha` | Mostra, escolhe ou cria a campanha da sessão (cada uma numa pasta) |
 | `aguardar_jogadores` | Espera você digitar uma ação na caixa do painel da extensão, dentro do Owlbear |
 | `ver_mapa` | Mostra ao Claude a imagem do mapa com a grade numerada e os tokens, para ele enxergar paredes e portas |
 | `criar_token` / `remover_token` | Copia um token da cena (ex.: mais goblins) ou tira um token da cena |
@@ -56,9 +57,9 @@ Fale com o Claude normalmente: "como está a mesa?", "move o goblin para o lado 
 | `focar_camera` | Leva a câmera de quem quiser até um ponto do mapa |
 | `inventario` | Consulta e muda o inventário (aba Inventário do painel, que os jogadores editam direto) |
 
-As fichas ficam na pasta `fichas/`: copie `fichas/MODELO.md` com o nome do personagem e preencha.
+Cada campanha tem a sua pasta em `campanhas/<nome>/` com `resumo.md` (história e onde pararam), `fichas/` (copie o `MODELO.md` com o nome do personagem e preencha) e `rolagens.jsonl`. No começo da sessão, diga ao Claude qual campanha vai ser jogada. Essas pastas ficam só no seu computador; só `campanhas/_modelo/` vai para o repositório.
 
-Toda rolagem fica gravada em `campanha/rolagens.jsonl`.
+Toda rolagem fica gravada no `rolagens.jsonl` da campanha ativa.
 
 ## Testar sem o Owlbear
 

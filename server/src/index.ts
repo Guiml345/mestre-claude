@@ -5,6 +5,7 @@ import { Bridge } from "./bridge.js";
 import { VERSION, loadConfig } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { createRollLogger } from "./rolllog.js";
+import { activeCampaignDir } from "./campaigns.js";
 import { INSTRUCTIONS, registerTools } from "./tools.js";
 
 // Atenção: a saída padrão é o canal do protocolo MCP. Todo log vai para stderr.
@@ -20,7 +21,7 @@ const bridge = new Bridge({
 });
 
 const server = new McpServer({ name: "mesa", version: VERSION }, { instructions: INSTRUCTIONS });
-registerTools(server, { table: bridge, logRoll: createRollLogger(config.campaignDir) });
+registerTools(server, { table: bridge, logRoll: createRollLogger(config.campaignDir ?? (() => activeCampaignDir(config.campaignsRoot))), campaignsRoot: config.campaignsRoot });
 
 let shuttingDown = false;
 async function shutdown(): Promise<void> {

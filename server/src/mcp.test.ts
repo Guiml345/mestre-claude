@@ -81,6 +81,7 @@ describe("servidor MCP", () => {
         "aguardar_jogadores",
         "alterar_combatente",
         "anunciar",
+        "campanha",
         "criar_token",
         "editar_token",
         "encerrar_combate",

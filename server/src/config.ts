@@ -14,8 +14,10 @@ export interface Config {
   port: number;
   /** Pasta com a extensão compilada, servida pela ponte. */
   staticDir: string;
-  /** Pasta onde ficam os registros da campanha (log de rolagens etc.). */
-  campaignDir: string;
+  /** Força a pasta do registro de rolagens (usado nos testes); null = campanha ativa. */
+  campaignDir: string | null;
+  /** Pasta com uma subpasta por campanha (campanhas/<nome>/). */
+  campaignsRoot: string;
   /** Origens extras (além de localhost) que podem se conectar como mesa. */
   extraOrigins: string[];
 }
@@ -27,7 +29,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     staticDir: path.join(PROJECT_ROOT, "extension", "dist"),
     campaignDir: env.MESA_RPG_CAMPANHA
       ? path.resolve(env.MESA_RPG_CAMPANHA)
-      : path.join(PROJECT_ROOT, "campanha"),
+      : null,
+    campaignsRoot: path.join(PROJECT_ROOT, "campanhas"),
     // A extensão publicada no GitHub Pages também pode se conectar como mesa.
     extraOrigins: [...DEFAULT_ORIGINS, ...(env.MESA_RPG_ORIGENS ?? "").split(",")]
       .map((origin) => origin.trim())

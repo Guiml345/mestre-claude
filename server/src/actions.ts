@@ -20,12 +20,15 @@ import {
 import type { AnnounceVariant, Announcement, Combat, FogState, GridInfo, InventoryCharacter, ItemUpdate, RawItem, RequestOptions, TableConfig } from "./protocol.js";
 import type { RollLogEntry } from "./rolllog.js";
 import { renderMap, type MapArea, type MapView } from "./mapview.js";
+import { createCampaign, describeCampaign, getActiveCampaign, listCampaigns, setActiveCampaign } from "./campaigns.js";
 import { addCombatants, changeCombatant, describeCombat, findCombatant, nextTurn, startCombat, type CombatantChange, type NewCombatant } from "./combat.js";
 
 export interface ActionContext {
   table: TableLink;
   rng?: Rng;
   logRoll?: (entry: RollLogEntry) => Promise<void>;
+  /** Pasta com uma subpasta por campanha. */
+  campaignsRoot?: string;
   /** Quanto esperar por uma mesa antes de desistir (padrão da ponte se omitido). */
   waitTableMs?: number;
   now?: () => Date;
@@ -900,6 +903,42 @@ export async function inventario(ctx: ActionContext, args: InventarioArgs): Prom
       }
       await save();
       return describeCharacter(c);
+    }
+  }
+}
+
+// ------------------------------------------------------------------ campanha
+
+export interface CampanhaArgs {
+  /** listar: todas; ver: a ativa; ativar: escolhe a campanha; criar: nova pasta a partir do modelo. */
+  acao: "listar" | "ver" | "ativar" | "criar";
+  nome?: string;
+}
+
+export async function campanha(ctx: ActionContext, args: CampanhaArgs): Promise<string> {
+  const root = ctx.campaignsRoot;
+  if (!root) throw new MesaError("INTERNAL", "Pasta de campanhas não configurada.");
+  switch (args.acao) {
+    case "listar": {
+      const all = await listCampaigns(root);
+      return all.length ? all.map(describeCampaign).join("\n") : "Nenhuma campanha ainda. Use acao criar.";
+    }
+    case "ver": {
+      const active = await getActiveCampaign(root);
+      const info = (await listCampaigns(root)).find((c) => c.slug === active);
+      return info
+        ? `Campanha ativa: ${describeCampaign(info)}.\nLeia ${info.dir}\resumo.md e as fichas antes de mestrar; no fim da sessão, atualize o resumo.`
+        : `Campanha ativa: "${active}" (pasta ainda não existe; as rolagens criam a pasta ao gravar).`;
+    }
+    case "criar": {
+      if (!args.nome?.trim()) throw new MesaError("BAD_REQUEST", "Diga o nome da campanha.");
+      const info = await createCampaign(root, args.nome);
+      return `Campanha criada: ${describeCampaign(info)}. Use acao ativar para jogar nela.`;
+    }
+    case "ativar": {
+      if (!args.nome?.trim()) throw new MesaError("BAD_REQUEST", "Diga qual campanha.");
+      const info = await setActiveCampaign(root, args.nome);
+      return `Campanha ativa agora: ${describeCampaign(info)}.\nLeia ${info.dir}\resumo.md e as fichas antes de mestrar.`;
     }
   }
 }

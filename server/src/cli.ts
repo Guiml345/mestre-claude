@@ -11,6 +11,7 @@ import {
   removerToken,
   verMapa,
   nevoa,
+  campanha,
   inventario,
   focarCamera,
   iniciarCombate,
@@ -29,6 +30,7 @@ import { Bridge } from "./bridge.js";
 import { VERSION, loadConfig } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { createRollLogger } from "./rolllog.js";
+import { activeCampaignDir } from "./campaigns.js";
 
 const USAGE = `Mestre Claude ${VERSION} - comandos de teste
 
@@ -74,7 +76,7 @@ async function main(): Promise<void> {
     log: (message) => console.error(`[mesa] ${message}`),
   });
   // A extensão tenta reconectar a cada poucos segundos, então a linha de comando espera um pouco por ela.
-  const ctx: ActionContext = { table: bridge, logRoll: createRollLogger(config.campaignDir), waitTableMs: 10_000 };
+  const ctx: ActionContext = { table: bridge, logRoll: createRollLogger(config.campaignDir ?? (() => activeCampaignDir(config.campaignsRoot))), campaignsRoot: config.campaignsRoot, waitTableMs: 10_000 };
 
   try {
     await bridge.ensure();
@@ -159,6 +161,12 @@ async function main(): Promise<void> {
           const list = JSON.parse(await readFile(required(rest[1], "arquivo.json"), "utf8"));
           console.log(await iniciarCombate(ctx, { combatentes: list, adicionar: sub === "adicionar" }));
         } else console.log(await verCombate(ctx));
+        return;
+      }
+      case "campanha": {
+        // npm run mesa -- campanha listar|ver|ativar <nome>|criar <nome>
+        const acao = (rest[0] ?? "ver") as "listar" | "ver" | "ativar" | "criar";
+        console.log(await campanha(ctx, { acao, nome: rest.slice(1).join(" ") || undefined }));
         return;
       }
       case "camera": {

@@ -3,12 +3,10 @@ node_modules/
 server/dist/
 extension/dist/
 
-# Coisas da mesa de vocês (não vão para o repositório público)
-campanha/
-fichas/*
-!fichas/MODELO.md
-resumo_campanha.md
-mapas/
+# Campanhas de vocês (história, fichas, rolagens, mapas): ficam só neste computador.
+# Só o modelo de campanha vai para o repositório.
+campanhas/*
+!campanhas/_modelo/
 
 # Material com direitos autorais e documentos pessoais
 *.pdf
