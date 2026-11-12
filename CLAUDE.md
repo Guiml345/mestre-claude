@@ -51,6 +51,7 @@ A lógica mora no servidor; a extensão só executa chamadas simples (`getState`
 
 - O servidor MCP fala pelo stdout: log só com `console.error`.
 - A ponte só aceita WebSocket de páginas servidas de localhost e de processos locais. Não afrouxe isso sem necessidade.
+- O Chrome bloqueia a extensão servida pelo GitHub Pages de falar com a ponte no localhost (acesso à rede local dentro do iframe do Owlbear; liberar nas configurações do site não resolveu). Por isso, na sala ficam ativas as DUAS cópias: o mestre se liga ao Claude pela cópia do localhost:7420 e os outros jogadores usam a do GitHub; a cópia do GitHub no navegador do mestre fica quieta para não repetir avisos. Os manifestos usam caminhos /mestre-claude/... (o Owlbear não resolve caminhos relativos).
 - A extensão está publicada em https://guiml345.github.io/mestre-claude/manifest.json (repositório Guiml345/mestre-claude, publicação automática a cada envio para main). A ponte aceita conexões dessa origem. Ainda sem teste real: jogar pela versão publicada e um jogador em outro computador.
 - Qual navegador fala com o Claude: o do mestre da sala, ou qualquer navegador que já se conectou antes (é o computador que roda o Claude, mesmo jogando sem ser mestre). Os outros jogadores mandam as falas pelo canal do Owlbear para esse navegador, que confere a vez e repassa com o nome tirado da lista de jogadores.
 - Depois de mexer no servidor, a sessão do Claude precisa ser reaberta para carregar o MCP novo.

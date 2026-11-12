@@ -1,5 +1,9 @@
 # Compila a extensão e publica no GitHub Pages a cada envio para a branch main.
-# O manifesto fica em https://guiml345.github.io/<nome-do-repositório>/manifest.json
+# O manifesto fica em https://guiml345.github.io/mestre-claude/manifest.json
+#
+# Montar e publicar são etapas separadas: se só a publicação falhar (erro
+# temporário do GitHub), "Re-run failed jobs" repete só ela, sem gerar um
+# segundo pacote do site.
 name: Publicar extensão
 
 on:
@@ -17,11 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  publicar:
+  montar:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,5 +36,13 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: extension/dist
+
+  publicar:
+    needs: montar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
       - id: deploy
         uses: actions/deploy-pages@v4
