@@ -51,6 +51,16 @@ class TableError extends Error {
 }
 
 let socket: WebSocket | null = null;
+/**
+ * Na sala podem estar ativas duas cópias da extensão (a servida pelo computador do
+ * mestre e a do GitHub Pages). Quando a outra cópia, neste mesmo navegador, está
+ * ligada ao Claude, esta fica quieta para não repetir avisos, câmera e alertas.
+ */
+let otherInstanceIsHost = false;
+
+function quiet(): boolean {
+  return otherInstanceIsHost && status.state !== "conectado";
+}
 let connecting = false;
 let status: BridgeStatus = { state: "procurando", url: BRIDGE_URL };
 const shown = new Set<string>();
@@ -382,7 +392,7 @@ const handlers: Record<string, (params: unknown) => Promise<unknown>> = {
 /** Mostra um aviso na tela do Owlbear e guarda no registro. Ignora repetidos. */
 function present(data: unknown): void {
   const announcement = parseAnnouncement(data);
-  if (!announcement || shown.has(announcement.id)) return;
+  if (quiet() || !announcement || shown.has(announcement.id)) return;
   if (shown.size > 500) shown.clear();
   shown.add(announcement.id);
   appendLog(OBR.room.id, announcement);
@@ -492,7 +502,7 @@ const cameraSeen = new Set<string>();
 /** Leva a visão deste navegador até a área, se a pessoa deixou "Câmera segue a ação" ligada. */
 function applyCamera(data: unknown): void {
   const raw = data as { id?: unknown; x?: unknown; y?: unknown; w?: unknown; h?: unknown } | null;
-  if (!raw || typeof raw.id !== "string" || cameraSeen.has(raw.id)) return;
+  if (quiet() || !raw || typeof raw.id !== "string" || cameraSeen.has(raw.id)) return;
   const [x, y, w, h] = [raw.x, raw.y, raw.w, raw.h];
   if (![x, y, w, h].every((v) => typeof v === "number" && Number.isFinite(v)) || (w as number) <= 0 || (h as number) <= 0) return;
   cameraSeen.add(raw.id);
@@ -592,7 +602,11 @@ function connect(): void {
     if (socket === ws) socket = null;
     setStatus("procurando");
     // O Claude pode não estar aberto ainda: continua tentando.
-    setTimeout(connect, RETRY_MS);
+    // O Claude pode não estar aberto ainda: continua tentando, a não ser que outra
+    // cópia da extensão neste navegador já esteja ligada a ele.
+    setTimeout(() => {
+      if (!otherInstanceIsHost) connect();
+    }, RETRY_MS);
   });
 }
 
@@ -615,6 +629,12 @@ OBR.onReady(async () => {
     }
   });
   OBR.broadcast.onMessage(CH_CAMERA, (event) => applyCamera(event.data));
+  OBR.broadcast.onMessage(CH_HOST, (event) => {
+    if (status.state === "conectado") return;
+    void OBR.player.getConnectionId().then((mine) => {
+      if (event.connectionId === mine) otherInstanceIsHost = (event.data as { online?: unknown } | null)?.online === true;
+    });
+  });
   void OBR.room.getMetadata().then((meta) => checkMyTurn(meta)).catch(() => {});
   OBR.room.onMetadataChange((meta) => void checkMyTurn(meta));
   // Enquanto estiver no ar, lembra os outros de tempos em tempos (quem entrou depois fica sabendo).
@@ -670,6 +690,7 @@ function beep(): void {
 
 /** Quando a vez passa para um personagem desta pessoa: som, aviso e painel aberto na aba Mesa. */
 async function checkMyTurn(meta: Record<string, unknown>): Promise<void> {
+  if (quiet()) return;
   const combat = parseCombat(meta[COMBAT_KEY]);
   const current = combat?.combatentes[combat.vez];
   const key = combat && current ? `${combat.rodada}:${combat.vez}:${current.id}` : "";
