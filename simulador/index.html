@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mesa simulada</title>
+    <style>
+      :root {
+        --bg: #1e2233;
+        --panel: #2a2f45;
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.6);
+        --line: rgba(255, 255, 255, 0.14);
+        --cell: 30px;
+        font-family: Roboto, "Segoe UI", system-ui, sans-serif;
+        font-size: 14px;
+        color-scheme: dark;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); }
+      header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+      h1 { margin: 0; font-size: 16px; font-weight: 500; }
+      h2 { margin: 0 0 6px; font-size: 12px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+      .note { color: var(--muted); font-size: 13px; }
+      .chip { padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; }
+      #badge:empty { display: none; }
+      #badge { padding: 1px 8px; border-radius: 999px; color: #fff; font-size: 12px; }
+      .layout { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; align-items: flex-start; }
+      .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+      .board-wrap { overflow: auto; max-width: 100%; }
+      #board {
+        position: relative;
+        background-color: #20253a;
+        background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+        background-size: var(--cell) var(--cell);
+      }
+      .map { position: absolute; background: rgba(102, 187, 106, 0.1); outline: 1px dashed rgba(102, 187, 106, 0.6); }
+      .map span { position: absolute; left: 4px; top: 2px; font-size: 11px; color: rgba(102, 187, 106, 0.9); }
+      .token {
+        position: absolute; display: flex; align-items: center; justify-content: center;
+        border-radius: 50%; border: 2px solid #fff; background: #7e57c2; color: #fff; font-size: 11px; font-weight: 600;
+        transition: left 0.35s ease, top 0.35s ease;
+      }
+      .token[data-layer="PROP"] { border-radius: 4px; background: #8d6e63; }
+      .token[data-hidden="true"] { opacity: 0.4; border-style: dashed; }
+      .token small { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 10px; font-weight: 400; color: var(--text); text-shadow: 0 0 3px #000; }
+      aside { display: flex; flex-direction: column; gap: 16px; width: 366px; max-width: 100%; }
+      iframe { border: 0; display: block; }
+      #popover { width: 340px; height: 420px; max-width: 100%; }
+      #background { width: 1px; height: 1px; opacity: 0; position: absolute; }
+      ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+      #toasts li, #history li { padding: 6px 10px; border-radius: 6px; background: #3a4060; border-left: 4px solid #9e9e9e; overflow-wrap: anywhere; }
+      li[data-variant="SUCCESS"] { border-left-color: #66bb6a !important; }
+      li[data-variant="WARNING"] { border-left-color: #ffb74d !important; }
+      li[data-variant="ERROR"] { border-left-color: #ef5350 !important; }
+      li[data-variant="INFO"] { border-left-color: #4fc3f7 !important; }
+      #history li { background: transparent; border: 1px solid var(--line); border-left-width: 4px; font-size: 13px; }
+      table { border-collapse: collapse; font-size: 13px; }
+      td, th { padding: 3px 10px 3px 0; text-align: left; }
+      th { color: var(--muted); font-weight: 400; }
+      pre { margin: 0; max-height: 160px; overflow: auto; font-size: 11px; color: var(--muted); white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Mesa simulada</h1>
+      <span class="note">Um Owlbear de mentira para testar a extensão Mestre Claude sem entrar numa sala.</span>
+      <span class="chip" id="role"></span>
+      <span class="chip">Extensão: <span id="ext"></span></span>
+      <span id="badge"></span>
+    </header>
+    <div class="layout">
+      <div>
+        <div class="panel board-wrap"><div id="board"></div></div>
+        <div class="panel" style="margin-top: 16px">
+          <h2>Tokens na cena</h2>
+          <table>
+            <thead><tr><th>Rótulo</th><th>Imagem</th><th>Casa</th><th>Camada</th><th>Visível</th></tr></thead>
+            <tbody id="tokens"></tbody>
+          </table>
+        </div>
+      </div>
+      <aside>
+        <div class="panel"><h2>Painel da extensão</h2><iframe id="popover" title="Painel da extensão"></iframe></div>
+        <div class="panel"><h2>Avisos na tela agora</h2><ul id="toasts"></ul><p class="note" id="no-toasts">Nenhum.</p></div>
+        <div class="panel"><h2>Histórico de avisos</h2><ul id="history"></ul></div>
+        <div class="panel"><h2>Chamadas ao SDK</h2><pre id="calls"></pre></div>
+      </aside>
+    </div>
+    <iframe id="background" title="Segundo plano da extensão"></iframe>
+
+    <script>
+      // Parâmetros: ?ext=http://localhost:7420  ?papel=PLAYER  ?cena=fechada  ?eco=1
+      const params = new URLSearchParams(location.search);
+      const EXT = (params.get("ext") ?? "http://localhost:7420").replace(/\/$/, "");
+      const ROLE = params.get("papel") === "PLAYER" ? "PLAYER" : "GM";
+      // eco=1: avisos enviados com destino LOCAL/ALL também voltam para quem enviou.
+      const ECHO = params.get("eco") === "1";
+      const ROOM = "sala-simulada";
+      const DPI = 150;
+      const COLS = 20;
+      const ROWS = 14;
+
+      function label(text) {
+        return {
+          richText: [{ type: "paragraph", children: [{ text }] }],
+          plainText: text,
+          style: { fillColor: "#fff", fillOpacity: 1, strokeColor: "#000", strokeOpacity: 1, strokeWidth: 0, textAlign: "CENTER", textAlignVertical: "BOTTOM", fontFamily: "Roboto", fontSize: 24, fontWeight: 400, lineHeight: 1.5, padding: 8 },
+          type: "PLAIN",
+          width: "AUTO",
+          height: "AUTO",
+        };
+      }
+
+      function image(id, name, text, layer, col, row, extra = {}) {
+        return {
+          id, type: "IMAGE", name, visible: true, locked: false, createdUserId: "gm-1", zIndex: 0,
+          lastModified: new Date().toISOString(), lastModifiedUserId: "gm-1",
+          position: { x: (col + 0.5) * DPI, y: (row + 0.5) * DPI }, rotation: 0, scale: { x: 1, y: 1 }, metadata: {}, layer,
+          image: { width: 300, height: 300, mime: "image/png", url: "" },
+          grid: { dpi: 300, offset: { x: 150, y: 150 } },
+          text: label(text), textItemType: "LABEL",
+          ...extra,
+        };
+      }
+
+      const state = {
+        ready: params.get("cena") !== "fechada",
+        grid: { dpi: DPI, type: "SQUARE", measurement: "CHEBYSHEV", scale: { raw: "5ft", parsed: { multiplier: 5, unit: "ft", digits: 0 } } },
+        player: { id: "gm-1", connectionId: "con-1", role: ROLE, name: "Guilherme", color: "#7e57c2", syncView: false, metadata: {} },
+        party: [{ id: "p-2", connectionId: "con-2", role: "PLAYER", name: "Leo", color: "#26a69a", syncView: false, metadata: {} }],
+        theme: {
+          mode: "DARK",
+          primary: { light: "#d1c4e9", main: "#bb99ff", dark: "#7e57c2", contrastText: "#000" },
+          secondary: { light: "#ffab91", main: "#ee99ff", dark: "#c2185b", contrastText: "#000" },
+          background: { default: "#1e2233", paper: "#2a2f45" },
+          text: { primary: "rgba(255, 255, 255, 0.92)", secondary: "rgba(255, 255, 255, 0.62)", disabled: "rgba(255, 255, 255, 0.4)" },
+        },
+        badge: { text: "", color: "#666" },
+        roomMetadata: {},
+        items: [
+          image("11111111-map0-4000-8000-000000000001", "Vila do Queijo Mofado", "", "MAP", 0, 0, {
+            position: { x: 0, y: 0 }, locked: true,
+            image: { width: COLS * 70, height: ROWS * 70, mime: "image/png", url: "" },
+            grid: { dpi: 70, offset: { x: 0, y: 0 } },
+          }),
+          image("aaaaaaaa-0001-4000-8000-000000000001", "Shield", "Guilherme", "CHARACTER", 6, 6),
+          image("bbbbbbbb-0002-4000-8000-000000000002", "Wizard", "Leo", "CHARACTER", 7, 8),
+          image("cccccccc-0003-4000-8000-000000000003", "Skull", "dragão", "CHARACTER", 16, 3, { scale: { x: 2, y: 2 }, position: { x: 17 * DPI, y: 4 * DPI } }),
+          image("dddddddd-0004-4000-8000-000000000004", "Goblin", "", "CHARACTER", 2, 6, { visible: false }),
+          image("eeeeeeee-0005-4000-8000-000000000005", "Barril", "", "PROP", 10, 10),
+        ],
+      };
+
+      // ------------------------------------------------------------ desenho
+
+      const $ = (id) => document.getElementById(id);
+
+      function bounds(item) {
+        const k = DPI / item.grid.dpi;
+        const x0 = item.position.x - item.grid.offset.x * k * item.scale.x;
+        const x1 = item.position.x + (item.image.width - item.grid.offset.x) * k * item.scale.x;
+        const y0 = item.position.y - item.grid.offset.y * k * item.scale.y;
+        const y1 = item.position.y + (item.image.height - item.grid.offset.y) * k * item.scale.y;
+        return { left: Math.min(x0, x1) / DPI, top: Math.min(y0, y1) / DPI, w: Math.abs(x1 - x0) / DPI, h: Math.abs(y1 - y0) / DPI };
+      }
+
+      const tokenEls = new Map();
+
+      function render() {
+        const cell = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--cell"));
+        const board = $("board");
+        board.style.width = `${COLS * cell}px`;
+        board.style.height = `${ROWS * cell}px`;
+        board.querySelectorAll(".map").forEach((el) => el.remove());
+        $("tokens").replaceChildren();
+
+        const seen = new Set();
+        for (const item of state.items) {
+          const b = bounds(item);
+          if (item.layer === "MAP") {
+            const el = document.createElement("div");
+            el.className = "map";
+            Object.assign(el.style, { left: `${b.left * cell}px`, top: `${b.top * cell}px`, width: `${b.w * cell}px`, height: `${b.h * cell}px` });
+            const name = document.createElement("span");
+            name.textContent = `Mapa: ${item.name}`;
+            el.append(name);
+            board.prepend(el);
+            continue;
+          }
+          seen.add(item.id);
+          let el = tokenEls.get(item.id);
+          if (!el) {
+            el = document.createElement("div");
+            el.className = "token";
+            el.append(document.createElement("span"), document.createElement("small"));
+            tokenEls.set(item.id, el);
+            board.append(el);
+          }
+          const text = item.text.plainText;
+          el.dataset.layer = item.layer;
+          el.dataset.hidden = String(!item.visible);
+          Object.assign(el.style, { left: `${b.left * cell}px`, top: `${b.top * cell}px`, width: `${b.w * cell}px`, height: `${b.h * cell}px` });
+          el.firstChild.textContent = (text || item.name).slice(0, 2).toUpperCase();
+          el.lastChild.textContent = text;
+
+          const row = document.createElement("tr");
+          const cellText = `(${Math.round(b.left)}, ${Math.round(b.top)})${b.w > 1.5 ? ` ${Math.round(b.w)}×${Math.round(b.h)}` : ""}`;
+          for (const value of [text || "(sem rótulo)", item.name, cellText, item.layer, item.visible ? "sim" : "oculto"]) {
+            const td = document.createElement("td");
+            td.textContent = value;
+            row.append(td);
+          }
+          $("tokens").append(row);
+        }
+        for (const [id, el] of tokenEls) if (!seen.has(id)) { el.remove(); tokenEls.delete(id); }
+
+        $("badge").textContent = state.badge.text;
+        $("badge").style.background = state.badge.color;
+      }
+
+      function addToast(id, message, variant) {
+        for (const listId of ["toasts", "history"]) {
+          const li = document.createElement("li");
+          li.dataset.variant = variant ?? "DEFAULT";
+          li.dataset.id = id;
+          li.textContent = message;
+          $(listId).prepend(li);
+        }
+        $("no-toasts").hidden = true;
+      }
+
+      function removeToast(id) {
+        $("toasts").querySelector(`li[data-id="${CSS.escape(id)}"]`)?.remove();
+        $("no-toasts").hidden = $("toasts").children.length > 0;
+      }
+
+      const callLog = [];
+      function logCall(frame, id) {
+        callLog.unshift(`${new Date().toLocaleTimeString("pt-BR")}  ${frame}  ${id}`);
+        callLog.length = Math.min(callLog.length, 60);
+        $("calls").textContent = callLog.join("\n");
+      }
+
+      // ------------------------------------------------- protocolo do SDK
+
+      /** Janela do iframe → o que ele assinou. */
+      const frames = new Map();
+
+      function post(target, id, data) {
+        target.postMessage({ id, data }, EXT);
+      }
+
+      function emit(subscription, id, data) {
+        for (const [target, frame] of frames) if (frame.subs.has(subscription)) post(target, id, data);
+      }
+
+      function needScene() {
+        if (!state.ready) throw new Error("Scene not ready");
+      }
+
+      const api = {
+        OBR_SCENE_IS_READY: () => ({ ready: state.ready }),
+        OBR_PLAYER_GET_NAME: () => ({ name: state.player.name }),
+        OBR_PLAYER_GET_ROLE: () => ({ role: state.player.role }),
+        OBR_PLAYER_GET_ID: () => ({ id: state.player.id }),
+        OBR_PARTY_GET_PLAYERS: () => ({ players: structuredClone(state.party) }),
+        OBR_SCENE_GRID_GET_DPI: () => (needScene(), { dpi: state.grid.dpi }),
+        OBR_SCENE_GRID_GET_SCALE: () => (needScene(), structuredClone(state.grid.scale)),
+        OBR_SCENE_GRID_GET_TYPE: () => (needScene(), { type: state.grid.type }),
+        OBR_SCENE_GRID_GET_MEASUREMENT: () => (needScene(), { measurement: state.grid.measurement }),
+        OBR_SCENE_ITEMS_GET_ALL_ITEMS: () => (needScene(), { items: structuredClone(state.items) }),
+        OBR_SCENE_ITEMS_GET_ITEMS: ({ ids }) => (needScene(), { items: structuredClone(state.items.filter((item) => ids.includes(item.id))) }),
+        OBR_SCENE_ITEMS_UPDATE_ITEMS: ({ updates }) => {
+          needScene();
+          for (const update of updates) {
+            const item = state.items.find((candidate) => candidate.id === update.id);
+            if (item) Object.assign(item, structuredClone(update), { lastModified: new Date().toISOString() });
+          }
+          render();
+          emit("OBR_SCENE_ITEMS", "OBR_SCENE_ITEMS_EVENT_CHANGE", { items: structuredClone(state.items) });
+          return {};
+        },
+        OBR_NOTIFICATION_SHOW: ({ message, variant }) => {
+          const id = crypto.randomUUID();
+          addToast(id, String(message), variant);
+          return { id };
+        },
+        OBR_NOTIFICATION_CLOSE: ({ id }) => (removeToast(String(id)), {}),
+        OBR_BROADCAST_SEND_MESSAGE: ({ channel, data, options }, sender) => {
+          const destination = options?.destination ?? "REMOTE";
+          if (destination === "REMOTE") return {}; // não há outros jogadores de verdade aqui
+          for (const [target, frame] of frames) {
+            if (!frame.channels.has(channel)) continue;
+            if (frame === sender && !ECHO) continue;
+            post(target, `OBR_BROADCAST_MESSAGE_${channel}`, { data: structuredClone(data), connectionId: state.player.connectionId });
+          }
+          return {};
+        },
+        OBR_ACTION_SET_BADGE_TEXT: ({ badgeText }) => ((state.badge.text = badgeText ?? ""), render(), {}),
+        OBR_ACTION_SET_BADGE_BACKGROUND_COLOR: ({ badgeBackgroundColor }) => ((state.badge.color = badgeBackgroundColor), render(), {}),
+        OBR_THEME_GET_THEME: () => ({ theme: structuredClone(state.theme) }),
+        OBR_ROOM_GET_METADATA: () => ({ metadata: structuredClone(state.roomMetadata) }),
+        OBR_ROOM_SET_METADATA: ({ update }) => {
+          for (const [key, value] of Object.entries(update)) {
+            if (value === undefined || value === null) delete state.roomMetadata[key];
+            else state.roomMetadata[key] = structuredClone(value);
+          }
+          emit("OBR_ROOM_METADATA", "OBR_ROOM_METADATA_EVENT_CHANGE", { metadata: structuredClone(state.roomMetadata) });
+          return {};
+        },
+        OBR_VIEWPORT_ANIMATE_TO_BOUNDS: ({ bounds }) => ((window.mesa.camera = bounds), {}),
+        OBR_PLAYER_GET_CONNECTION_ID: () => ({ connectionId: state.player.connectionId }),
+        OBR_ACTION_SET_WIDTH: ({ width }) => (($("popover").style.width = `${width}px`), {}),
+        OBR_ACTION_SET_HEIGHT: ({ height }) => (($("popover").style.height = `${height}px`), {}),
+        OBR_SCENE_ITEMS_ADD_ITEMS: ({ items }) => {
+          needScene();
+          state.items.push(...structuredClone(items));
+          render();
+          return {};
+        },
+        OBR_SCENE_ITEMS_DELETE_ITEMS: ({ ids }) => {
+          needScene();
+          state.items = state.items.filter((item) => !ids.includes(item.id));
+          render();
+          return {};
+        },
+      };
+
+      window.addEventListener("message", (event) => {
+        if (event.origin !== EXT) return;
+        const frame = frames.get(event.source);
+        const message = event.data;
+        if (!frame || !message || typeof message.id !== "string" || message.ref !== frame.ref) return;
+        logCall(frame.name, message.id);
+
+        if (message.id === "OBR_BROADCAST_SUBSCRIBE") return void frame.channels.add(message.data.channel);
+        if (message.id === "OBR_BROADCAST_UNSUBSCRIBE") return void frame.channels.delete(message.data.channel);
+        if (message.id.endsWith("_UNSUBSCRIBE")) return void frame.subs.delete(message.id.replace(/_UNSUBSCRIBE$/, ""));
+        if (message.id.endsWith("_SUBSCRIBE")) return void frame.subs.add(message.id.replace(/_SUBSCRIBE$/, ""));
+
+        const reply = (suffix, data) => post(event.source, `${message.id}_${suffix}${message.nonce ?? ""}`, data);
+        const handler = api[message.id];
+        if (!handler) {
+          reply("ERROR", { error: { name: "NotImplemented", message: `A mesa simulada não implementa ${message.id}` } });
+          return;
+        }
+        try {
+          reply("RESPONSE", handler(message.data ?? {}, frame));
+        } catch (err) {
+          reply("ERROR", { error: { name: "Error", message: String(err?.message ?? err) } });
+        }
+      });
+
+      function mount(id, page) {
+        const iframe = $(id);
+        const frame = { name: id, ref: `ref-${id}`, subs: new Set(), channels: new Set() };
+        // O Owlbear identifica a sala num parâmetro: base64 de "origem sala".
+        const obrref = btoa(`${location.origin} ${ROOM}`);
+        iframe.addEventListener("load", () => {
+          frames.set(iframe.contentWindow, frame);
+          post(iframe.contentWindow, "OBR_READY", { ref: frame.ref, userId: state.player.id });
+        });
+        iframe.src = `${EXT}/${page}?obrref=${encodeURIComponent(obrref)}`;
+      }
+
+      $("role").textContent = ROLE === "GM" ? "Você é o mestre" : "Você é jogador";
+      $("ext").textContent = EXT;
+      render();
+      mount("background", "background.html");
+      mount("popover", "index.html");
+
+      // Para testes pelo console: window.mesa.state, window.mesa.setReady(false) etc.
+      window.mesa = {
+        state,
+        render,
+        setReady(ready) {
+          state.ready = ready;
+          emit("OBR_SCENE_READY", "OBR_SCENE_EVENT_READY_CHANGE", { ready });
+        },
+      };
+    </script>
+  </body>
+</html>

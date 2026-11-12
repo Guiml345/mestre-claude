@@ -1,0 +1,19 @@
+# Dependências e arquivos gerados pela compilação
+node_modules/
+server/dist/
+extension/dist/
+
+# Coisas da mesa de vocês (não vão para o repositório público)
+campanha/
+fichas/*
+!fichas/MODELO.md
+resumo_campanha.md
+mapas/
+
+# Material com direitos autorais e documentos pessoais
+*.pdf
+*.docx
+
+# Configuração local desta máquina (tem o caminho da pasta no seu computador)
+.mcp.json
+.claude/settings.local.json

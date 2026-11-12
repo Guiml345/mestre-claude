@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mestre Claude</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Mestre Claude</h1>
+        <span id="status" class="pill" data-state="procurando">Procurando o Claude…</span>
+        <button id="expand" class="icon-button" type="button" title="Expandir o painel" aria-label="Expandir o painel">⤢</button>
+      </header>
+      <p id="hint" class="hint" hidden></p>
+      <nav class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="mesa" aria-selected="true">Mesa</button>
+        <button type="button" role="tab" data-tab="inventario" aria-selected="false">Inventário</button>
+        <button type="button" role="tab" data-tab="opcoes" aria-selected="false">Opções</button>
+      </nav>
+
+      <div id="tab-mesa" class="tab" role="tabpanel">
+        <div id="combat" class="combat" hidden></div>
+        <section>
+          <div class="section-head">
+            <h2>Registro da mesa</h2>
+            <button id="clear" type="button" hidden>Limpar</button>
+          </div>
+          <p id="empty" class="empty">Nada por aqui ainda. As rolagens e os avisos do mestre aparecem aqui.</p>
+          <ol id="log" class="log"></ol>
+        </section>
+        <form id="say" class="say" autocomplete="off">
+          <input id="say-text" type="text" maxlength="500" placeholder="O que você faz?" aria-label="Sua ação" disabled />
+          <button id="say-send" type="submit" disabled>Enviar</button>
+        </form>
+      </div>
+
+      <div id="tab-inventario" class="tab" role="tabpanel" hidden>
+        <div id="inventory" class="inventory"></div>
+        <form id="new-char" class="inline-form" autocomplete="off">
+          <input id="new-char-name" type="text" maxlength="40" placeholder="Nome do personagem" aria-label="Nome do personagem" />
+          <button type="submit">Adicionar</button>
+        </form>
+      </div>
+
+      <div id="tab-opcoes" class="tab" role="tabpanel" hidden>
+        <div id="settings" class="settings" hidden>
+          <h2>Só para você</h2>
+          <label><input id="opt-camera" type="checkbox" /> Câmera segue a ação</label>
+          <label><input id="opt-turno" type="checkbox" /> Avisar quando for minha vez <span class="hint-inline">(som e painel abrindo)</span></label>
+
+          <div id="gm-settings" class="settings-group" hidden>
+            <h2>Mesa (só o mestre da sala)</h2>
+            <label><input id="opt-pausa" type="checkbox" /> Pausar o mestre <span class="hint-inline">(as falas ficam guardadas)</span></label>
+            <label><input id="opt-nevoa" type="checkbox" /> Névoa de guerra <span class="hint-inline">(desligada: o mapa todo aparece)</span></label>
+            <label class="select-row">
+              Narração
+              <select id="opt-narracao">
+                <option value="curta">Curta</option>
+                <option value="media">Média</option>
+                <option value="detalhada">Detalhada</option>
+              </select>
+            </label>
+            <label class="select-row">
+              Dificuldade
+              <select id="opt-dificuldade">
+                <option value="gentil">Gentil</option>
+                <option value="padrao">Padrão</option>
+                <option value="mortal">Mortal</option>
+              </select>
+            </label>
+            <label><input id="opt-regras" type="checkbox" /> Explicar as regras <span class="hint-inline">(bom para iniciantes)</span></label>
+          </div>
+        </div>
+      </div>
+    </main>
+    <script type="module" src="./src/popover.ts"></script>
+  </body>
+</html>

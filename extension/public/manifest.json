@@ -1,0 +1,17 @@
+{
+  "name": "Mestre Claude",
+  "version": "0.1.0",
+  "manifest_version": 1,
+  "description": "Liga a mesa ao Claude para ele mestrar: mover tokens, rolar dados e mostrar avisos.",
+  "icon": "icon.svg",
+  "author": "Galera do RPG",
+  "action": {
+    "title": "Mestre Claude",
+    "icon": "icon.svg",
+    "popover": "index.html",
+    "height": 420,
+    "width": 340
+  },
+  "background_url": "background.html",
+  "permissions": [{ "name": "autoplay", "reason": "Tocar um som curto quando for a sua vez no combate." }]
+}

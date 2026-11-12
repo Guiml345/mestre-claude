@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ponte",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server/dist/cli.js", "servir"],
+      "port": 7420
+    },
+    {
+      "name": "simulador",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["simulador/servidor.mjs"],
+      "port": 7421
+    }
+  ]
+}
