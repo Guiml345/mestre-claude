@@ -462,6 +462,14 @@ async function setMarkers(params: unknown): Promise<{ markers: number }> {
 const said = new Set<string>();
 
 /** Nome de quem mandou, pela lista de jogadores do Owlbear (não pelo que a mensagem diz). */
+/** O mestre da sala pode falar a qualquer momento, mesmo fora da vez. */
+async function authorIsGm(connectionId: string | null): Promise<boolean> {
+  const mine = await OBR.player.getConnectionId().catch(() => "");
+  if (!connectionId || connectionId === mine) return (await OBR.player.getRole().catch(() => "PLAYER")) === "GM";
+  const players = await OBR.party.getPlayers().catch(() => []);
+  return players.find((p) => p.connectionId === connectionId)?.role === "GM";
+}
+
 async function authorOf(connectionId: string | null): Promise<string> {
   const mine = await OBR.player.getConnectionId().catch(() => "");
   if (!connectionId || connectionId === mine) return OBR.player.getName().catch(() => "Jogador");
@@ -483,7 +491,7 @@ async function forwardSay(data: unknown, connectionId: string | null): Promise<v
 
   const author = await authorOf(connectionId);
   const combat = parseCombat((await OBR.room.getMetadata().catch(() => ({})) as Record<string, unknown>)[COMBAT_KEY]);
-  const gate = turnGate(combat, author);
+  const gate = (await authorIsGm(connectionId)) ? { allowed: true, reason: "" } : turnGate(combat, author);
   if (!gate.allowed) {
     void OBR.broadcast.sendMessage(CH_SAY_REJECT, { id: say.id, reason: gate.reason }, { destination: "ALL" }).catch(() => {});
     return;

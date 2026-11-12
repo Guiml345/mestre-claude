@@ -599,8 +599,19 @@ async function loadCombat(ctx: ActionContext): Promise<Combat | null> {
   return ctx.table.call("getCombat", undefined, requestOptions(ctx));
 }
 
+/**
+ * Grava o combate e confere se a sala ficou com ele. Duas gravações seguidas muito
+ * rápidas podem chegar fora de ordem ao Owlbear; nesse caso grava de novo.
+ */
 async function saveCombat(ctx: ActionContext, combat: Combat | null): Promise<void> {
-  await ctx.table.call("setCombat", { combat }, requestOptions(ctx));
+  const wanted = JSON.stringify(combat);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await ctx.table.call("setCombat", { combat }, requestOptions(ctx));
+    await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 150 : 400));
+    const saved = await ctx.table.call("getCombat", undefined, requestOptions(ctx));
+    if (JSON.stringify(saved) === wanted) return;
+  }
+  throw new MesaError("TABLE_ERROR", "O Owlbear não guardou o combate. Confira com ver_combate.");
 }
 
 async function requireCombat(ctx: ActionContext): Promise<Combat> {

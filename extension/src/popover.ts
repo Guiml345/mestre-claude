@@ -86,7 +86,8 @@ function refresh(): void {
   hintEl.textContent = text.hint;
   hintEl.hidden = !text.hint;
 
-  const gate = turnGate(currentCombat, myName);
+  // O mestre da sala pode falar a qualquer momento (pausar, corrigir, encerrar um combate).
+  const gate = isGm ? { allowed: true, reason: "" } : turnGate(currentCombat, myName);
   sayText.disabled = sayButton.disabled = !online || !gate.allowed;
   sayText.placeholder = !online ? "Aguardando o Claude conectar…" : !gate.allowed ? gate.reason : paused ? "Mestre em pausa: sua mensagem fica guardada" : "O que você faz?";
   if (online && paused) {
