@@ -454,7 +454,9 @@ export class Hub {
     }
 
     const root = path.resolve(this.options.staticDir);
-    const relative = pathname.endsWith("/") ? `${pathname}index.html` : pathname;
+    // O manifesto usa /mestre-claude/... (o caminho do GitHub Pages); aqui a extensão fica na raiz.
+    const unprefixed = pathname === "/mestre-claude" ? "/" : pathname.startsWith("/mestre-claude/") ? pathname.slice("/mestre-claude".length) : pathname;
+    const relative = unprefixed.endsWith("/") ? `${unprefixed}index.html` : unprefixed;
     const file = path.resolve(root, `.${relative}`);
     if (file !== root && !file.startsWith(root + path.sep)) {
       res.writeHead(403, CORS).end();

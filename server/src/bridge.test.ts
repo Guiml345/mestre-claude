@@ -118,6 +118,14 @@ describe("Hub: HTTP", () => {
     assert.equal((await get(hub.port, "/manifest.json", {}, "POST")).status, 405);
   });
 
+  it("serve a extensão também sob /mestre-claude/, como no GitHub Pages", async () => {
+    assert.equal((await get(hub.port, "/mestre-claude/index.html")).status, 200);
+    assert.equal((await get(hub.port, "/mestre-claude/assets/app.js")).status, 200);
+    assert.equal((await get(hub.port, "/mestre-claude/")).status, 200);
+    const escape = await get(hub.port, "/mestre-claude/../../mesa-segredo.txt");
+    assert.ok(!escape.body.includes("segredo"));
+  });
+
   it("não deixa sair da pasta da extensão", async () => {
     for (const attempt of ["/../mesa-segredo.txt", "/%2e%2e/mesa-segredo.txt", "/..%2fmesa-segredo.txt", "/assets/../../mesa-segredo.txt", "/..%5cmesa-segredo.txt"]) {
       const res = await get(hub.port, attempt);
