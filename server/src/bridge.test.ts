@@ -318,7 +318,7 @@ describe("Hub: mesa", () => {
       table.say("", "m2");
       table.say("x".repeat(900), "m3");
       await waitFor(() => hub.takeMessages.length >= 0 && (hub as unknown as { inbox: unknown[] }).inbox.length === 2);
-      const got = await hub.takeMessages(0);
+      const got = (await hub.takeMessages(0))!;
       assert.deepEqual(got.map((m) => [m.id, m.author, m.text.length]), [["m1", "Mestre", 14], ["m3", "Mestre", 500]]);
       assert.equal(got[0]!.text, "ataco o goblin");
       assert.deepEqual(await hub.takeMessages(0), []);
@@ -326,8 +326,16 @@ describe("Hub: mesa", () => {
       // Quem está esperando recebe assim que a mensagem chega; sem mensagem, volta vazio no prazo.
       const pending = hub.takeMessages(3_000);
       setTimeout(() => table.say("abro a porta", "m4"), 60);
-      assert.equal((await pending)[0]!.text, "abro a porta");
+      assert.equal((await pending)![0]!.text, "abro a porta");
       assert.deepEqual(await hub.takeMessages(60), []);
+
+      // Um escutador novo derruba o antigo, e a mensagem vai só para o novo.
+      const old = hub.takeMessages(3_000, "a");
+      const fresh = hub.takeMessages(3_000, "b");
+      assert.equal(await old, null);
+      assert.equal(hub.info().listening, true);
+      table.say("só para o novo", "m5");
+      assert.equal((await fresh)![0]!.text, "só para o novo");
 
       // Quem não se apresentou como mesa não consegue falar pelos jogadores.
       await strangerOpen;
@@ -383,7 +391,7 @@ describe("Bridge: várias sessões do Claude", () => {
       // A segunda sessão também ouve os jogadores, através da primeira.
       const listening = second.messages(3_000);
       setTimeout(() => table.say("pela outra sessão", "p1"), 60);
-      assert.equal((await listening)[0]!.text, "pela outra sessão");
+      assert.equal((await listening)![0]!.text, "pela outra sessão");
       assert.deepEqual(await second.messages(0), []);
 
       // Erros da mesa atravessam a ponte com o mesmo código.

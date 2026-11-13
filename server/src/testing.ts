@@ -257,6 +257,7 @@ export function memoryLink(table: FakeTable | null, port = 7420): TableLink {
         pid: 1,
         version: "teste",
         controllers: 0,
+        listening: false,
         lastRejected: null,
         tables: table
           ? [{ origin: "teste", connectedAt: new Date(0).toISOString(), active: true, state: table.state }]

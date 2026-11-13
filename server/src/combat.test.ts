@@ -91,6 +91,56 @@ describe("combate (ações na mesa)", () => {
   });
 });
 
+describe("turno_monstro", () => {
+  it("move, ataca contra a CA, desconta o dano e passa a vez", async () => {
+    const { turnoMonstro } = await import("./actions.js");
+    const { token } = await import("./testing.js");
+    const table = new FakeTable([token("g", "Goblin 3", 2, 2), token("h", "Guilherme", 6, 2)]);
+    // Dados na ordem: ataque 1 (d20=15), dano 1 (d6=4), ataque 2 (d20=1), ataque 3 (20 natural), dano 3 (4 e 5).
+    const dice = [15, 4, 1, 20, 4, 5];
+    const ctx = { table: memoryLink(table), rng: () => dice.shift()! };
+    await iniciarCombate(ctx, {
+      combatentes: [
+        { nome: "Goblin 3", iniciativa: 15, pv: 7, ca: 15 },
+        { nome: "Guilherme", iniciativa: 10, pv: 20, ca: 18, lado: "jogador", jogador: "GM" },
+      ],
+    });
+
+    const out = await turnoMonstro(ctx, {
+      monstro: "goblin 3",
+      narracao: "O goblin avança gritando.",
+      mover: { junto_de: "Guilherme" },
+      ataques: [
+        { alvo: "Guilherme", nome: "Cimitarra", bonus: 4, dano: "1d6+2" },
+        { alvo: "Guilherme", bonus: 4, dano: "1d6+2" },
+        { alvo: "Guilherme", bonus: 4, dano: "1d6+2" },
+      ],
+    });
+    assert.match(out, /Contra CA 18: ACERTOU/);
+    assert.match(out, /Guilherme: PV 20 → 14\/20/);
+    assert.match(out, /ERRO automático/);
+    assert.match(out, /ACERTO CRÍTICO/);
+    // Crítico: 2d6+2 = 4+5+2 = 11.
+    assert.match(out, /Guilherme: PV 14 → 3\/20/);
+    assert.equal(table.combat?.combatentes.find((c) => c.nome === "Guilherme")?.pv, 3);
+    assert.match(out, /▶ 10 Guilherme/);
+    assert.ok(table.announcements.some((a) => a.text === "O goblin avança gritando."));
+    assert.match(table.announcements.at(-1)!.text, /vez de Guilherme/);
+    assert.equal(dice.length, 0);
+
+    // Fora da vez: avisa; com aplicar false, não desconta.
+    dice.push(19, 6);
+    const held = await turnoMonstro(ctx, {
+      monstro: "Goblin 3",
+      ataques: [{ alvo: "Guilherme", bonus: 4, dano: "1d6+2", aplicar: false }],
+      passar_vez: false,
+    });
+    assert.match(held, /não era a vez de Goblin 3/);
+    assert.match(held, /Dano não descontado/);
+    assert.equal(table.combat?.combatentes.find((c) => c.nome === "Guilherme")?.pv, 3);
+  });
+});
+
 describe("câmera", () => {
   it("acompanha movimento e pode ser levada a um token ou área", async () => {
     const { focarCamera, moverToken } = await import("./actions.js");

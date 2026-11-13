@@ -17,7 +17,7 @@ export interface TableLink {
   ): Promise<TableMethods[M]["result"]>;
   info(): Promise<BridgeInfo>;
   /** Mensagens que os jogadores digitaram na mesa; espera até `waitMs` se não houver nenhuma. */
-  messages(waitMs: number): Promise<PlayerMessage[]>;
+  messages(waitMs: number, listener?: string): Promise<PlayerMessage[] | null>;
 }
 
 /**
@@ -66,13 +66,14 @@ export class Bridge implements TableLink {
     return { ...info, mode: "proxy" };
   }
 
-  async messages(waitMs: number): Promise<PlayerMessage[]> {
+  /** `null` quer dizer que outro escutador assumiu: quem chamou deve parar. */
+  async messages(waitMs: number, listener?: string): Promise<PlayerMessage[] | null> {
     await this.ensure();
-    if (this.hub) return this.hub.takeMessages(waitMs);
+    if (this.hub) return this.hub.takeMessages(waitMs, listener);
     if (!this.proxy) return [];
     try {
-      const result = await this.proxy.request("$mensagens", { waitMs }, { timeoutMs: waitMs + 1_000, waitTableMs: 0 });
-      return Array.isArray(result) ? (result as PlayerMessage[]) : [];
+      const result = await this.proxy.request("$mensagens", { waitMs, listener }, { timeoutMs: waitMs + 1_000, waitTableMs: 0 });
+      return result === null ? null : Array.isArray(result) ? (result as PlayerMessage[]) : [];
     } catch (err) {
       // A outra sessão fechou enquanto esperávamos: quem chamou tenta de novo.
       if (errorCode(err) === "HUB_GONE") return [];

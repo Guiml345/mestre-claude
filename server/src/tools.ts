@@ -14,6 +14,7 @@ import {
   focarCamera,
   iniciarCombate,
   proximoTurno,
+  turnoMonstro,
   alterarCombatente,
   verCombate,
   encerrarCombate,
@@ -206,6 +207,43 @@ export function registerTools(server: McpServer, ctx: ActionContext): void {
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     () => run(() => proximoTurno(ctx)),
+  );
+
+  server.registerTool(
+    "turno_monstro",
+    {
+      title: "Turno do monstro",
+      description:
+        "O turno inteiro de um monstro ou NPC numa chamada: mostra a narração na tela, move o token (opcional; confira paredes com ver_mapa antes), rola cada ataque contra a CA do alvo guardada no combate, rola o dano (dobrando os dados no 20 natural), desconta dos PV e passa a vez. Se o alvo for jogador e puder reagir ao acerto (ex.: Escudo Arcano), use `aplicar: false` nesse ataque, pergunte ao jogador e aplique o dano depois com alterar_combatente.",
+      inputSchema: {
+        monstro: z.string().min(1).describe("Nome do monstro no combate."),
+        narracao: z.string().max(240).optional().describe("Narração mostrada na tela antes dos ataques."),
+        mover: z
+          .object({
+            para: z.object({ coluna: z.number().int(), linha: z.number().int() }).optional(),
+            deslocar: z.object({ colunas: z.number().int(), linhas: z.number().int() }).optional(),
+            junto_de: z.string().optional().describe("Fica ao lado deste token (corpo a corpo)."),
+          })
+          .optional()
+          .describe("Exatamente um destino, como em mover_token."),
+        ataques: z
+          .array(
+            z.object({
+              alvo: z.string().min(1).describe("Nome do alvo no combate."),
+              nome: z.string().max(40).optional().describe("Nome do ataque (ex.: Mordida)."),
+              bonus: z.number().int().min(-5).max(30).describe("Bônus de ataque do monstro."),
+              dano: z.string().min(1).max(60).describe("Dano em dados (ex.: 2d4+2)."),
+              modo: z.enum(["normal", "vantagem", "desvantagem"]).optional(),
+              aplicar: z.boolean().optional().describe("false rola mas não desconta os PV."),
+            }),
+          )
+          .max(6)
+          .optional(),
+        passar_vez: z.boolean().optional().describe("Padrão: true."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    (args) => run(() => turnoMonstro(ctx, args)),
   );
 
   server.registerTool(

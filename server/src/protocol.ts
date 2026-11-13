@@ -53,6 +53,8 @@ export interface TableState {
   /** Os outros jogadores conectados na sala. */
   party: PlayerInfo[];
   grid: GridInfo | null;
+  /** A aba do Owlbear está em segundo plano (o Chrome a deixa lenta). */
+  hidden?: boolean;
 }
 
 export interface ItemUpdate {

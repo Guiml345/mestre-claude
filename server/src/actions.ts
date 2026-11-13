@@ -117,6 +117,14 @@ export async function statusMesa(ctx: ActionContext): Promise<string> {
   if (info.tables.length > 1) {
     lines.push(`Há ${info.tables.length} abas do Owlbear conectadas; os comandos vão para a do mestre que conectou por último.`);
   }
+  if (state.hidden) {
+    lines.push("Aviso: a aba do Owlbear está em segundo plano; o navegador pode atrasar as respostas. Deixe-a visível durante o jogo.");
+  }
+  lines.push(
+    info.listening
+      ? "Escutador: ligado (as falas do painel chegam ao Claude)."
+      : "Escutador: desligado. Ligue `node server/dist/cli.js escutar` em segundo plano para receber as falas do painel.",
+  );
   return lines.join("\n");
 }
 
@@ -467,7 +475,10 @@ export async function aguardarJogadores(ctx: ActionContext, args: AguardarArgs =
     return "O mestre está em pausa no painel: as falas ficam guardadas e você não deve responder nem mexer na mesa. Espere a pausa acabar.";
   }
   const seconds = Math.min(Math.max(Math.trunc(args.segundos ?? 50), 0), 55);
-  const messages = await ctx.table.messages(seconds * 1_000);
+  const messages = await ctx.table.messages(seconds * 1_000, "aguardar_jogadores");
+  if (messages === null) {
+    return "Outro escutador assumiu as falas dos jogadores; não chame aguardar_jogadores enquanto ele estiver ligado.";
+  }
   if (messages.length === 0) {
     return `Ninguém escreveu na mesa em ${seconds} s. Chame aguardar_jogadores de novo para continuar esperando.`;
   }
@@ -540,6 +551,11 @@ function judge(result: RollResult, kind: RollKind, cd: number | undefined): Verd
 }
 
 export async function rolar(ctx: ActionContext, args: RolarArgs): Promise<string> {
+  return (await rollAndShow(ctx, args)).text;
+}
+
+/** Rola, mostra na mesa (se não for secreta) e grava no registro. */
+async function rollAndShow(ctx: ActionContext, args: RolarArgs): Promise<{ text: string; result: RollResult }> {
   const mode = args.modo ?? "normal";
   const kind = args.tipo ?? "outro";
   const result = roll(args.expressao, { mode, critical: args.critico, rng: ctx.rng });
@@ -593,7 +609,7 @@ export async function rolar(ctx: ActionContext, args: RolarArgs): Promise<string
     lines.push(`Aviso: não consegui gravar no registro de rolagens (${errorMessage(err)}).`);
   }
 
-  return lines.join("\n");
+  return { text: lines.join("\n"), result };
 }
 
 // -------------------------------------------------------------------- combate
@@ -683,6 +699,88 @@ ${describeCombat(combat)}`;
 export async function verCombate(ctx: ActionContext): Promise<string> {
   const combat = await loadCombat(ctx);
   return combat ? describeCombat(combat) : "Não há combate em andamento.";
+}
+
+export interface AtaqueMonstro {
+  alvo: string;
+  /** Nome do ataque (ex.: "Mordida"). */
+  nome?: string;
+  /** Bônus de ataque (ex.: 4 para 1d20+4). */
+  bonus: number;
+  /** Dano em dados (ex.: "2d4+2"). */
+  dano: string;
+  modo?: RollMode;
+  /** false só rola o ataque e o dano, sem descontar PV (ex.: o alvo pode reagir com Escudo Arcano). */
+  aplicar?: boolean;
+}
+
+export interface TurnoMonstroArgs {
+  monstro: string;
+  /** Fala de narração mostrada na tela antes dos ataques (até 240 caracteres). */
+  narracao?: string;
+  mover?: Omit<MoverArgs, "token">;
+  ataques?: AtaqueMonstro[];
+  /** Passa a vez no fim (padrão: sim). */
+  passar_vez?: boolean;
+}
+
+/**
+ * O turno inteiro de um monstro numa chamada só: narra, move, ataca contra a CA
+ * do alvo, desconta o dano no combate e passa a vez.
+ */
+export async function turnoMonstro(ctx: ActionContext, args: TurnoMonstroArgs): Promise<string> {
+  let combat = await requireCombat(ctx);
+  const monster = findCombatant(combat, args.monstro);
+  const lines: string[] = [];
+  if (combat.combatentes[combat.vez]?.id !== monster.id) {
+    lines.push(`Aviso: não era a vez de ${monster.nome} (era de ${combat.combatentes[combat.vez]?.nome ?? "ninguém"}).`);
+  }
+  if (monster.pv <= 0) lines.push(`Aviso: ${monster.nome} está caído.`);
+
+  if (args.narracao?.trim()) {
+    lines.push(await anunciar(ctx, { mensagem: args.narracao, tom: "narracao" }));
+  }
+  if (args.mover) {
+    lines.push(await moverToken(ctx, { ...args.mover, token: monster.token ?? monster.nome }));
+  }
+
+  let changed = false;
+  for (const attack of args.ataques ?? []) {
+    const target = findCombatant(combat, attack.alvo);
+    const label = `${monster.nome}: ${attack.nome?.trim() || "ataque"} em ${target.nome}`;
+    const bonus = Math.trunc(attack.bonus);
+    const hit = await rollAndShow(ctx, {
+      expressao: `1d20${bonus >= 0 ? "+" : ""}${bonus}`,
+      rotulo: label,
+      modo: attack.modo,
+      tipo: "ataque",
+      cd: target.ca,
+    });
+    lines.push(hit.text);
+    const d20 = hit.result.d20;
+    const critical = d20 === 20;
+    const hits = critical || (d20 !== 1 && (target.ca === undefined || hit.result.total >= target.ca));
+    if (!hits) continue;
+    if (target.ca === undefined) lines.push(`${target.nome} não tem CA no combate: confira o acerto antes de valer o dano.`);
+    const damage = await rollAndShow(ctx, { expressao: attack.dano, rotulo: `Dano de ${label}`, critico: critical });
+    lines.push(damage.text);
+    if (attack.aplicar === false || target.ca === undefined) {
+      lines.push("Dano não descontado: use alterar_combatente quando decidir.");
+      continue;
+    }
+    const total = Math.max(damage.result.total, 0);
+    const change = changeCombatant(combat, target.nome, { pv_delta: -total });
+    combat = change.combat;
+    changed = true;
+    lines.push(change.note);
+  }
+
+  const advance = args.passar_vez ?? true;
+  if (advance) combat = nextTurn(combat);
+  if (changed || advance) await saveCombat(ctx, combat);
+  if (advance) await announceTurn(ctx, combat);
+  lines.push(describeCombat(combat));
+  return lines.join("\n");
 }
 
 export async function encerrarCombate(ctx: ActionContext): Promise<string> {

@@ -96,6 +96,7 @@ describe("servidor MCP", () => {
         "remover_token",
         "rolar",
         "status_mesa",
+        "turno_monstro",
         "ver_combate",
         "ver_mapa",
       ]);

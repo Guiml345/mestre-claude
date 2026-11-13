@@ -129,6 +129,8 @@ async function main(): Promise<void> {
         // Rodado em segundo plano, a saída do processo acorda o Claude.
         const limitMinutes = rest[0] ? integer(rest[0], "minutos") : 120;
         const deadline = Date.now() + limitMinutes * 60_000;
+        // Um escutador novo substitui o antigo: assim nunca ficam dois ligados.
+        const listenerId = `escutar-${process.pid}-${Date.now()}`;
         while (Date.now() < deadline) {
           // Em pausa: deixa as falas guardadas na ponte e só confere de novo depois.
           const config = await bridge.call("getConfig", undefined, { waitTableMs: 0, timeoutMs: 4_000 }).catch(() => null);
@@ -136,7 +138,11 @@ async function main(): Promise<void> {
             await new Promise((resolve) => setTimeout(resolve, 5_000));
             continue;
           }
-          const messages = await bridge.messages(55_000);
+          const messages = await bridge.messages(55_000, listenerId);
+          if (messages === null) {
+            console.log("Outro escutador assumiu. Este parou.");
+            return;
+          }
           if (messages.length > 0) {
             console.log(await aguardarJogadores({ ...ctx, table: { ...bridge, info: () => bridge.info(), call: bridge.call.bind(bridge), messages: async () => messages } }, { segundos: 0 }));
             return;

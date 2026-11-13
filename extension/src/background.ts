@@ -78,6 +78,7 @@ function setStatus(state: BridgeState): void {
   status = { state, url: BRIDGE_URL };
   publishStatus();
   if (state === "conectado") writeFlag(HOST_KEY, true);
+  holdLock(state === "conectado");
   // Só quem esteve ou está ligado ao Claude avisa os outros; um jogador comum não fala nada.
   if (wasOnline || state === "conectado") announceHost();
   // Selo no ícone da extensão: dá para ver que o Claude está ligado sem abrir o painel.
@@ -140,6 +141,7 @@ async function getState(): Promise<TableState> {
     player: { id: OBR.player.id, name, role },
     party: party.map((player) => ({ id: player.id, name: player.name, role: player.role })),
     grid,
+    hidden: document.visibilityState === "hidden",
   };
 }
 
@@ -569,6 +571,26 @@ async function focus(params: unknown): Promise<{ sent: true }> {
   return { sent: true };
 }
 
+// ------------------------------------------------------- aba em segundo plano
+
+let releaseLock: (() => void) | null = null;
+
+/**
+ * Enquanto ligado ao Claude, segura uma trava do navegador: o Chrome não congela
+ * nem descarta abas que seguram uma, então a mesa continua respondendo mesmo
+ * com a aba do Owlbear em segundo plano.
+ */
+function holdLock(hold: boolean): void {
+  if (!hold) {
+    releaseLock?.();
+    releaseLock = null;
+    return;
+  }
+  if (releaseLock || !("locks" in navigator)) return;
+  const held = new Promise<void>((resolve) => (releaseLock = resolve));
+  void navigator.locks.request("mestre-claude-mesa", { mode: "shared" }, () => held).catch(() => {});
+}
+
 // ------------------------------------------------------------ anfitrião
 
 /** Avisa os outros navegadores se o Claude está no ar por este aqui. */
@@ -655,6 +677,8 @@ function connect(): void {
 // ------------------------------------------------------------------ partida
 
 OBR.onReady(async () => {
+  // A ponte fica sabendo quando a aba some ou volta, para avisar o Claude.
+  document.addEventListener("visibilitychange", () => void sendState());
   OBR.broadcast.onMessage(CH_ANNOUNCE, (event) => present(event.data));
   OBR.broadcast.onMessage(CH_STATUS_REQUEST, () => {
     publishStatus();

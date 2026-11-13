@@ -23,6 +23,8 @@ export interface HubInfo {
   tables: Array<{ origin: string; connectedAt: string; active: boolean; state: TableState | null }>;
   controllers: number;
   lastRejected: { origin: string; at: string } | null;
+  /** Algum escutador (o Claude) está esperando falas dos jogadores agora. */
+  listening: boolean;
 }
 
 interface Client {
@@ -43,7 +45,9 @@ interface Pending {
   timer: NodeJS.Timeout;
 }
 
-const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_TIMEOUT_MS = 12_000;
+/** Pedidos só de leitura: dá para repetir sem risco quando a mesa demora a responder. */
+const SAFE_TO_RETRY = new Set(["ping", "getState", "getItems", "getCombat", "getConfig", "getInventory", "fogState"]);
 const DEFAULT_WAIT_TABLE_MS = 4_000;
 const HEARTBEAT_MS = 15_000;
 
@@ -113,6 +117,8 @@ export class Hub {
   /** Mensagens digitadas pelos jogadores no painel, esperando o mestre ler. */
   private readonly inbox: PlayerMessage[] = [];
   private readonly seenMessages = new Set<string>();
+  private listener: { id: string; replace: () => void } | null = null;
+  private lastListenAt = 0;
   private readonly inboxWaiters = new Set<() => void>();
   private readonly log: (message: string) => void;
   private heartbeat: NodeJS.Timeout | null = null;
@@ -163,11 +169,22 @@ export class Hub {
       })),
       controllers: [...this.clients].filter((client) => client.role === "controller").length,
       lastRejected: this.lastRejected,
+      listening: this.inboxWaiters.size > 0 || Date.now() - this.lastListenAt < 5_000,
     };
   }
 
   /** Envia um pedido à mesa ativa e espera a resposta. */
+  /** Envia um pedido à mesa ativa e espera a resposta. Leituras que demoram são tentadas de novo uma vez. */
   async request(method: string, params?: unknown, options: RequestOptions = {}): Promise<unknown> {
+    try {
+      return await this.requestOnce(method, params, options);
+    } catch (err) {
+      if (errorCode(err) !== "TIMEOUT" || !SAFE_TO_RETRY.has(method)) throw err;
+      return this.requestOnce(method, params, options);
+    }
+  }
+
+  private async requestOnce(method: string, params: unknown, options: RequestOptions): Promise<unknown> {
     if (this.closed) throw new MesaError("HUB_GONE", "A ponte foi encerrada.");
     const table = await this.waitForTable(options.waitTableMs ?? DEFAULT_WAIT_TABLE_MS);
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -176,7 +193,10 @@ export class Hub {
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new MesaError("TIMEOUT", `A mesa não respondeu a "${method}" em ${timeoutMs / 1000}s.`));
+        const hint = table.state?.hidden
+          ? " A aba do Owlbear está em segundo plano e o Chrome a deixa lenta: deixe-a visível (lado a lado com o Claude, por exemplo)."
+          : "";
+        reject(new MesaError("TIMEOUT", `A mesa não respondeu a "${method}" em ${timeoutMs / 1000}s.${hint}`));
       }, timeoutMs);
       this.pending.set(id, { client: table, resolve, reject, timer });
       this.send(table, { type: "request", id, method, params });
@@ -186,17 +206,26 @@ export class Hub {
   /**
    * Entrega (e esvazia) as mensagens dos jogadores. Se não houver nenhuma,
    * espera até `waitMs` por uma e devolve lista vazia se ninguém escrever.
+   * Só existe um escutador por vez: um escutador novo (outro `listener`) faz o
+   * anterior receber `null`, para ele parar sozinho.
    */
-  takeMessages(waitMs = 0): Promise<PlayerMessage[]> {
+  takeMessages(waitMs = 0, listener?: string): Promise<PlayerMessage[] | null> {
+    this.lastListenAt = Date.now();
+    if (listener && this.listener && this.listener.id !== listener) this.listener.replace();
     if (this.inbox.length > 0 || waitMs <= 0 || this.closed) return Promise.resolve(this.inbox.splice(0));
     return new Promise((resolve) => {
-      const done = () => {
+      const finish = (value: PlayerMessage[] | null) => {
         clearTimeout(timer);
         this.inboxWaiters.delete(done);
-        resolve(this.inbox.splice(0));
+        if (this.listener?.replace === replace) this.listener = null;
+        this.lastListenAt = Date.now();
+        resolve(value);
       };
+      const done = () => finish(this.inbox.splice(0));
+      const replace = () => finish(null);
       const timer = setTimeout(done, waitMs);
       this.inboxWaiters.add(done);
+      if (listener) this.listener = { id: listener, replace };
     });
   }
 
@@ -401,7 +430,10 @@ export class Hub {
           method === "$info"
             ? Promise.resolve(this.info())
             : method === "$mensagens"
-              ? this.takeMessages(Number((params as { waitMs?: unknown } | undefined)?.waitMs) || 0)
+              ? this.takeMessages(
+                  Number((params as { waitMs?: unknown } | undefined)?.waitMs) || 0,
+                  typeof (params as { listener?: unknown } | undefined)?.listener === "string" ? (params as { listener: string }).listener : undefined,
+                )
               : this.request(method, params, options);
         work.then(
           (result) => this.send(client, { type: "response", id, ok: true, result }),
