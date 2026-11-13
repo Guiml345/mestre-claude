@@ -93,6 +93,8 @@ export interface TableMethods {
   announce: { params: Announcement; result: { delivered: true } };
   /** Cria cópias de um token (mesma imagem, tamanho e camada) nas posições dadas. */
   cloneItems: { params: { sourceId: string; copies: CloneCopy[] }; result: { ids: string[] } };
+  /** Cria tokens a partir de uma imagem publicada (catálogo de tokens). */
+  addImages: { params: { url: string; size: number; layer?: "CHARACTER" | "PROP"; tokens: Array<{ position: Vec2; text: string; name: string; visible?: boolean }> }; result: { ids: string[] } };
   deleteItems: { params: { ids: string[] }; result: { deleted: number } };
   getCombat: { params: undefined; result: Combat | null };
   setCombat: { params: { combat: Combat | null }; result: { saved: true } };

@@ -7,6 +7,7 @@
   "scripts": {
     "build": "npm run build:server && npm run build:ext",
     "build:server": "tsc -p server",
+    "build:tokens": "node scripts/tokens.mjs",
     "build:ext": "tsc -p extension && vite build extension",
     "test": "npm run build:server && node --test \"server/dist/**/*.test.js\"",
     "dev:ext": "vite extension",

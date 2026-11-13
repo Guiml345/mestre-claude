@@ -240,6 +240,39 @@ async function cloneItems(params: unknown): Promise<{ ids: string[] }> {
   return { ids: items.map((item) => item.id) };
 }
 
+/** Endereços de onde a extensão aceita criar tokens (o catálogo publicado com ela). */
+const IMAGE_HOSTS = ["https://guiml345.github.io/"];
+
+/** Cria tokens a partir de uma imagem publicada (ex.: o catálogo de tokens), um por posição. */
+async function addImages(params: unknown): Promise<{ ids: string[] }> {
+  await requireScene();
+  const raw = params as { url?: unknown; size?: unknown; tokens?: unknown; layer?: unknown } | undefined;
+  const url = typeof raw?.url === "string" ? raw.url : "";
+  if (!IMAGE_HOSTS.some((host) => url.startsWith(host))) {
+    throw new TableError("BAD_REQUEST", "Só crio tokens com imagens do catálogo publicado.");
+  }
+  const size = typeof raw?.size === "number" && raw.size > 0 ? raw.size : 256;
+  const layer = raw?.layer === "PROP" ? "PROP" : "CHARACTER";
+  const list = (Array.isArray(raw?.tokens) ? raw.tokens : []) as Array<{ position?: unknown; text?: unknown; visible?: unknown; name?: unknown }>;
+  const items = list
+    .slice(0, 10)
+    .filter((t) => isFinitePoint(t.position))
+    .map((t) => {
+      const position = t.position as { x: number; y: number };
+      const label = typeof t.text === "string" ? t.text.slice(0, 60) : "";
+      return buildImage({ width: size, height: size, mime: "image/png", url }, { dpi: size, offset: { x: size / 2, y: size / 2 } })
+        .name(typeof t.name === "string" ? t.name.slice(0, 60) : label || "Token")
+        .layer(layer)
+        .position({ x: position.x, y: position.y })
+        .visible(typeof t.visible === "boolean" ? t.visible : true)
+        .plainText(label)
+        .build();
+    });
+  if (items.length === 0) throw new TableError("BAD_REQUEST", "Nenhuma posição válida para criar tokens.");
+  await OBR.scene.items.addItems(items);
+  return { ids: items.map((item) => item.id) };
+}
+
 async function deleteItems(params: unknown): Promise<{ deleted: number }> {
   await requireScene();
   const ids = (params as { ids?: unknown } | undefined)?.ids;
@@ -362,6 +395,7 @@ const handlers: Record<string, (params: unknown) => Promise<unknown>> = {
   updateItems,
   announce,
   cloneItems,
+  addImages,
   deleteItems,
   getCombat,
   setCombat,

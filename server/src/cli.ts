@@ -11,6 +11,7 @@ import {
   removerToken,
   verMapa,
   nevoa,
+  catalogoTokens,
   campanha,
   inventario,
   focarCamera,
@@ -76,7 +77,7 @@ async function main(): Promise<void> {
     log: (message) => console.error(`[mesa] ${message}`),
   });
   // A extensão tenta reconectar a cada poucos segundos, então a linha de comando espera um pouco por ela.
-  const ctx: ActionContext = { table: bridge, logRoll: createRollLogger(config.campaignDir ?? (() => activeCampaignDir(config.campaignsRoot))), campaignsRoot: config.campaignsRoot, waitTableMs: 10_000 };
+  const ctx: ActionContext = { table: bridge, logRoll: createRollLogger(config.campaignDir ?? (() => activeCampaignDir(config.campaignsRoot))), campaignsRoot: config.campaignsRoot, iconsDir: config.iconsDir, waitTableMs: 10_000 };
 
   try {
     await bridge.ensure();
@@ -167,6 +168,15 @@ async function main(): Promise<void> {
         // npm run mesa -- campanha listar|ver|ativar <nome>|criar <nome>
         const acao = (rest[0] ?? "ver") as "listar" | "ver" | "ativar" | "criar";
         console.log(await campanha(ctx, { acao, nome: rest.slice(1).join(" ") || undefined }));
+        return;
+      }
+      case "catalogo": {
+        // npm run mesa -- catalogo buscar <palavra> | catalogo criar <icone> <qtd> <col> <lin> [rótulo]
+        if (rest[0] === "criar") {
+          console.log(await catalogoTokens(ctx, { acao: "criar", icone: required(rest[1], "ícone"), quantidade: integer(rest[2], "qtd"), para: { coluna: integer(rest[3], "col"), linha: integer(rest[4], "lin") }, rotulo: rest.slice(5).join(" ") || undefined }));
+        } else {
+          console.log(await catalogoTokens(ctx, { acao: "buscar", icone: required(rest.slice(1).join(" "), "palavra") }));
+        }
         return;
       }
       case "camera": {

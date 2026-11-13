@@ -8,6 +8,7 @@ import {
   removerToken,
   verMapa,
   nevoa,
+  catalogoTokens,
   campanha,
   inventario,
   focarCamera,
@@ -44,6 +45,27 @@ async function run(action: () => Promise<string>): Promise<CallToolResult> {
 }
 
 export function registerTools(server: McpServer, ctx: ActionContext): void {
+  server.registerTool(
+    "catalogo_tokens",
+    {
+      title: "Catálogo de tokens",
+      description:
+        "Põe tokens no mapa sem precisar de um modelo na cena, usando o catálogo de ícones do game-icons.net (mais de 4.000: monstros, animais, pessoas, objetos). Os nomes dos ícones são em inglês: traduza (lobo → wolf, caveira → skull). `buscar` lista os ícones que batem; `criar` põe 1 a 10 tokens numa casa (`para`) ou perto de um token (`perto_de`), com o rótulo que você escolher (ex.: \"Lobo\"). Use `objeto: true` para coisas (baú, barril).",
+      inputSchema: {
+        acao: z.enum(["buscar", "criar"]),
+        icone: z.string().min(1).max(60).describe("Nome em inglês (ex.: goblin, wolf head) ou \"autor/nome\" vindo de uma busca."),
+        quantidade: z.number().int().min(1).max(10).optional(),
+        rotulo: z.string().max(40).optional().describe("Nome que aparece no token, em português."),
+        para: z.object({ coluna: z.number().int(), linha: z.number().int() }).optional(),
+        perto_de: z.string().optional(),
+        visivel: z.boolean().optional().describe("false cria escondido dos jogadores."),
+        objeto: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    (args) => run(() => catalogoTokens(ctx, args)),
+  );
+
   server.registerTool(
     "campanha",
     {

@@ -20,6 +20,7 @@ import {
 import type { AnnounceVariant, Announcement, Combat, FogState, GridInfo, InventoryCharacter, ItemUpdate, RawItem, RequestOptions, TableConfig } from "./protocol.js";
 import type { RollLogEntry } from "./rolllog.js";
 import { renderMap, type MapArea, type MapView } from "./mapview.js";
+import { CATALOG_SIZE, iconUrl, loadCatalog, resolveIcon, searchCatalog } from "./catalog.js";
 import { createCampaign, describeCampaign, getActiveCampaign, listCampaigns, setActiveCampaign } from "./campaigns.js";
 import { addCombatants, changeCombatant, describeCombat, findCombatant, nextTurn, startCombat, type CombatantChange, type NewCombatant } from "./combat.js";
 
@@ -29,6 +30,8 @@ export interface ActionContext {
   logRoll?: (entry: RollLogEntry) => Promise<void>;
   /** Pasta com uma subpasta por campanha. */
   campaignsRoot?: string;
+  /** Pasta icons/ com o catálogo do game-icons.net. */
+  iconsDir?: string;
   /** Quanto esperar por uma mesa antes de desistir (padrão da ponte se omitido). */
   waitTableMs?: number;
   now?: () => Date;
@@ -952,4 +955,101 @@ export async function campanha(ctx: ActionContext, args: CampanhaArgs): Promise<
       return `Campanha ativa agora: ${describeCampaign(info)}.\nLeia ${info.dir}\resumo.md e as fichas antes de mestrar.`;
     }
   }
+}
+
+// ------------------------------------------------------------ catálogo de tokens
+
+export interface CatalogoArgs {
+  /** buscar: lista ícones pelo nome (em inglês); criar: põe tokens com o ícone no mapa. */
+  acao: "buscar" | "criar";
+  /** Nome do ícone em inglês (ex.: "goblin", "wolf head") ou "autor/nome". */
+  icone: string;
+  quantidade?: number;
+  /** Rótulo dos tokens (ex.: "Lobo"); vira "Lobo 2", "Lobo 3"... quando já existe. */
+  rotulo?: string;
+  /** Casa onde pôr (o primeiro); os outros vão em volta. */
+  para?: { coluna: number; linha: number };
+  /** Ou: perto de qual token. */
+  perto_de?: string;
+  visivel?: boolean;
+  /** true põe na camada de objetos (barril, baú), não de personagens. */
+  objeto?: boolean;
+}
+
+export async function catalogoTokens(ctx: ActionContext, args: CatalogoArgs): Promise<string> {
+  const list = await loadCatalog(ctx.iconsDir ?? "");
+  if (list.length === 0) throw new MesaError("NO_CATALOG", "O catálogo de ícones está vazio (falta a pasta icons/).");
+
+  if (args.acao === "buscar") {
+    const found = searchCatalog(list, args.icone);
+    return found.length
+      ? `Ícones para "${args.icone}" (${found.length}${found.length === 25 ? "+" : ""}): ${found.map((i) => `${i.author}/${i.name}`).join(", ")}`
+      : `Nenhum ícone com "${args.icone}". Os nomes são em inglês: tente outra palavra (ex.: wolf, skull, dragon).`;
+  }
+
+  const { icon, options } = resolveIcon(list, args.icone);
+  if (!icon) throw new MesaError("NO_CATALOG", `Nenhum ícone com "${args.icone}". Use acao buscar com outra palavra, em inglês.`);
+  const count = Math.trunc(args.quantidade ?? 1);
+  if (count < 1 || count > 10) throw new MesaError("BAD_REQUEST", "Dá para criar de 1 a 10 tokens por vez.");
+
+  const { grid, items } = await loadScene(ctx);
+  requireSquare(grid);
+  // Um token de mentira de 1 casa, para calcular as posições livres.
+  const model: RawItem = {
+    id: "catalogo", type: "IMAGE", name: icon.name, layer: "CHARACTER", position: { x: 0, y: 0 }, rotation: 0,
+    scale: { x: 1, y: 1 }, visible: true, locked: false,
+    image: { width: CATALOG_SIZE, height: CATALOG_SIZE, url: "" }, grid: { dpi: CATALOG_SIZE, offset: { x: CATALOG_SIZE / 2, y: CATALOG_SIZE / 2 } },
+  };
+  const map = items.find((item) => item.layer === "MAP" && item.image);
+  const bounds = map ? footprint(map, grid) : undefined;
+  const cells: Array<{ col: number; row: number }> = [];
+  let anchor: RawItem;
+  if (args.para) {
+    anchor = { ...model, position: positionForCell(model, grid, args.para.coluna, args.para.linha) };
+    if (occupants({ col: args.para.coluna, row: args.para.linha, w: 1, h: 1 }, items, grid).length === 0) cells.push({ col: args.para.coluna, row: args.para.linha });
+  } else if (args.perto_de) {
+    anchor = resolveToken(items, args.perto_de, grid);
+  } else {
+    throw new MesaError("BAD_REQUEST", "Diga onde: `para` (casa) ou `perto_de` (token).");
+  }
+  if (cells.length < count) {
+    const blockers = [...items, ...cells.map((c) => ({ ...model, id: `c${c.col}-${c.row}`, position: positionForCell(model, grid, c.col, c.row) }))];
+    cells.push(...freeCellsAround(model, anchor, count - cells.length, blockers, grid, bounds));
+  }
+
+  const base = (args.rotulo ?? icon.name.replace(/-/g, " ")).trim();
+  const used = items.filter((item) => TOKEN_LAYERS.includes(item.layer)).map((item) => normalize(displayName(item)));
+  let next = used.some((n) => n === normalize(base) || n.startsWith(`${normalize(base)} `)) ? 2 : count > 1 ? 1 : 1;
+  const labels: string[] = [];
+  while (labels.length < count) {
+    const label = next === 1 ? base : `${base} ${next}`;
+    if (!used.includes(normalize(label))) labels.push(label);
+    next++;
+  }
+
+  const { ids } = await ctx.table.call(
+    "addImages",
+    {
+      url: iconUrl(icon),
+      size: CATALOG_SIZE,
+      layer: args.objeto ? "PROP" : "CHARACTER",
+      tokens: cells.map((cell, i) => ({
+        position: positionForCell(model, grid, cell.col, cell.row),
+        text: labels[i]!,
+        name: icon.name,
+        visible: args.visivel ?? true,
+      })),
+    },
+    requestOptions(ctx),
+  );
+  const after = await ctx.table.call("getItems", undefined, requestOptions(ctx));
+  const created = ids.map((id) => after.find((item) => item.id === id)).filter((item): item is RawItem => Boolean(item));
+  if (created.length !== count) throw new MesaError("TABLE_ERROR", `Pedi ${count} token(s), mas só ${created.length} apareceram na cena.`);
+  await focusCells(ctx, grid, union(cells.map((c) => ({ col: c.col, row: c.row, w: 1, h: 1 }))));
+  const others = options.filter((o) => o !== icon).slice(0, 5).map((o) => `${o.author}/${o.name}`);
+  return [
+    `Criei ${count} token(s) com o ícone ${icon.author}/${icon.name}:`,
+    ...created.map((item) => `• "${displayName(item)}": casa (${footprint(item, grid).col}, ${footprint(item, grid).row}); id ${item.id.slice(0, 8)}`),
+    others.length ? `Outros ícones parecidos: ${others.join(", ")}.` : "",
+  ].filter(Boolean).join("\n");
 }

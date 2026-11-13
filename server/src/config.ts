@@ -18,6 +18,8 @@ export interface Config {
   campaignDir: string | null;
   /** Pasta com uma subpasta por campanha (campanhas/<nome>/). */
   campaignsRoot: string;
+  /** Pasta icons/ (game-icons.net), base do catálogo de tokens. */
+  iconsDir: string;
   /** Origens extras (além de localhost) que podem se conectar como mesa. */
   extraOrigins: string[];
 }
@@ -31,6 +33,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? path.resolve(env.MESA_RPG_CAMPANHA)
       : null,
     campaignsRoot: path.join(PROJECT_ROOT, "campanhas"),
+    iconsDir: path.join(PROJECT_ROOT, "icons"),
     // A extensão publicada no GitHub Pages também pode se conectar como mesa.
     extraOrigins: [...DEFAULT_ORIGINS, ...(env.MESA_RPG_ORIGENS ?? "").split(",")]
       .map((origin) => origin.trim())

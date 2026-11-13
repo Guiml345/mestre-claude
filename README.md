@@ -118,3 +118,7 @@ A extensão também fica publicada em `https://guiml345.github.io/<nome-do-repos
   }
 }
 ```
+
+## Créditos
+
+Os tokens do catálogo vêm dos ícones do [game-icons.net](https://game-icons.net) (CC BY 3.0). A lista de autores está em [CREDITOS.md](CREDITOS.md).

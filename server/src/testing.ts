@@ -147,6 +147,15 @@ export class FakeTable {
       case "setInventory":
         this.inventory = structuredClone((params as { inventory: Inventory }).inventory);
         return { saved: true };
+      case "addImages": {
+        const { tokens, size } = params as { tokens: Array<{ position: { x: number; y: number }; text: string; name: string; visible?: boolean }>; size: number };
+        const ids = tokens.map((t, i) => {
+          const id = `img-${this.items.length}-${i}`;
+          this.items.push({ id, type: "IMAGE", name: t.name, layer: "CHARACTER", position: { ...t.position }, rotation: 0, scale: { x: 1, y: 1 }, visible: t.visible ?? true, locked: false, text: t.text, image: { width: size, height: size, url: "" }, grid: { dpi: size, offset: { x: size / 2, y: size / 2 } } });
+          return id;
+        });
+        return { ids };
+      }
       case "setConfig":
         this.fogEnabled = (params as { nevoa?: boolean }).nevoa ?? this.fogEnabled;
         this.paused = (params as { pausado?: boolean }).pausado ?? this.paused;
