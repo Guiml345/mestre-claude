@@ -20,6 +20,10 @@ export interface Config {
   campaignsRoot: string;
   /** Pasta icons/ (game-icons.net), base do catálogo de tokens. */
   iconsDir: string;
+  /** Papéis comuns (em português) com o ícone já conferido. */
+  rolesFile: string;
+  /** Magias e tabelas de classe (SRD 5.2.1). */
+  dataDir: string;
   /** Origens extras (além de localhost) que podem se conectar como mesa. */
   extraOrigins: string[];
 }
@@ -34,6 +38,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : null,
     campaignsRoot: path.join(PROJECT_ROOT, "campanhas"),
     iconsDir: path.join(PROJECT_ROOT, "icons"),
+    rolesFile: path.join(PROJECT_ROOT, "server", "papeis.json"),
+    dataDir: path.join(PROJECT_ROOT, "extension", "public", "dados"),
     // A extensão publicada no GitHub Pages também pode se conectar como mesa.
     extraOrigins: [...DEFAULT_ORIGINS, ...(env.MESA_RPG_ORIGENS ?? "").split(",")]
       .map((origin) => origin.trim())

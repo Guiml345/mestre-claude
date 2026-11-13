@@ -225,3 +225,23 @@ describe("distâncias", () => {
     throwsCode(() => requireSquare({ ...SQUARE_GRID, type: "HEX_VERTICAL" }), "GRID_UNSUPPORTED");
   });
 });
+
+describe("mapa girado", () => {
+  it("considera a rotação ao calcular a área do mapa e dos tokens", async () => {
+    const { footprint } = await import("./grid.js");
+    const { SQUARE_GRID } = await import("./testing.js");
+    // Mapa de 4×6 casas (imagem 400×600, 100 px por casa), âncora no canto, girado 270°.
+    const map = {
+      id: "m", type: "IMAGE", name: "Prisão", layer: "MAP", position: { x: 0, y: 0 }, rotation: 270, scale: { x: 1, y: 1 },
+      visible: true, locked: true, image: { width: 400, height: 600, url: "" }, grid: { dpi: 100, offset: { x: 0, y: 0 } },
+    };
+    const fp = footprint(map, SQUARE_GRID);
+    assert.deepEqual([fp.col, fp.row, fp.w, fp.h], [0, -4, 6, 4]);
+    // 90°: vai para a esquerda da âncora.
+    assert.deepEqual(((f) => [f.col, f.row, f.w, f.h])(footprint({ ...map, rotation: 90 }, SQUARE_GRID)), [-6, 0, 6, 4]);
+    // Token redondo girado continua na mesma casa.
+    const tok = { ...map, layer: "CHARACTER", rotation: 45, image: { width: 100, height: 100, url: "" }, grid: { dpi: 100, offset: { x: 50, y: 50 } }, position: { x: 225, y: 375 } };
+    const t = footprint(tok, SQUARE_GRID);
+    assert.deepEqual([t.col, t.row], [1, 2]);
+  });
+});

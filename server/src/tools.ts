@@ -25,6 +25,7 @@ import {
   statusMesa,
   salvarCena,
   restaurarCena,
+  ficha,
   type ActionContext,
 } from "./actions.js";
 import { errorMessage } from "./errors.js";
@@ -53,10 +54,10 @@ export function registerTools(server: McpServer, ctx: ActionContext): void {
     {
       title: "Catálogo de tokens",
       description:
-        "Põe tokens no mapa sem precisar de um modelo na cena, usando o catálogo de ícones do game-icons.net (mais de 4.000: monstros, animais, pessoas, objetos). Os nomes dos ícones são em inglês: traduza (lobo → wolf, caveira → skull). `buscar` lista os ícones que batem; `criar` põe 1 a 10 tokens numa casa (`para`) ou perto de um token (`perto_de`), com o rótulo que você escolher (ex.: \"Lobo\"). Use `objeto: true` para coisas (baú, barril).",
+        "Põe tokens no mapa sem precisar de um modelo na cena, usando o catálogo de ícones do game-icons.net (mais de 4.000: monstros, animais, pessoas, objetos). Primeiro tente um PAPEL PRONTO em português, com ícone já conferido: raças (anão, elfo, orc…), classes do D&D (guerreiro, mago, clérigo…), NPCs (guarda, taverneiro, ferreiro, nobre, criança…) e monstros (goblin, troll, esqueleto, dragão…); sinônimos valem e `papeis` lista todos. Para o que não estiver lá, use o nome do ícone em inglês (lobo → wolf) e confira a imagem antes. `buscar` lista os ícones que batem; `criar` põe 1 a 10 tokens numa casa (`para`) ou perto de um token (`perto_de`), com o rótulo que você escolher (sem rótulo, usa o nome do papel). Use `objeto: true` para coisas (baú, barril).",
       inputSchema: {
-        acao: z.enum(["buscar", "criar"]),
-        icone: z.string().min(1).max(60).describe("Nome em inglês (ex.: goblin, wolf head) ou \"autor/nome\" vindo de uma busca."),
+        acao: z.enum(["buscar", "criar", "papeis"]),
+        icone: z.string().min(1).max(60).optional().describe("Papel em português (ex.: guarda, goblin) ou nome do ícone em inglês ou \"autor/nome\". Não precisa em papeis."),
         quantidade: z.number().int().min(1).max(10).optional(),
         rotulo: z.string().max(40).optional().describe("Nome que aparece no token, em português."),
         para: z.object({ coluna: z.number().int(), linha: z.number().int() }).optional(),
@@ -85,12 +86,32 @@ export function registerTools(server: McpServer, ctx: ActionContext): void {
   );
 
   server.registerTool(
+    "ficha",
+    {
+      title: "Ficha de personagem",
+      description:
+        "Fichas dos personagens em JSON (regras de 2024), em campanhas/<campanha>/fichas/<nome>.json e na aba Fichas do painel, onde os jogadores editam. Toda chamada junta disco e sala e fica a versão mais nova. `ver` sem nome resume todas; com nome mostra a ficha inteira, com magias preparadas, espaços livres, pendências e o que estiver fora da regra. `sincronizar` só junta. `preparar` troca a lista inteira de magias preparadas (ids ou nomes em inglês do SRD), conferindo a lista da classe, o nível e o limite. `gastar` marca espaço de magia usado (ex.: Golpe Divino). `descanso` longo recupera PV e espaços (sem nome: todos). Use antes de pedir rolagens ou montar o combate (PV, CA, bônus).",
+      inputSchema: {
+        acao: z.enum(["ver", "sincronizar", "preparar", "gastar", "descanso"]),
+        nome: z.string().max(60).optional().describe("Nome do personagem."),
+        magias: z.array(z.string().max(60)).max(40).optional().describe("preparar: a lista inteira, ex.: [\"bless\", \"Cure Wounds\"]."),
+        nivel: z.number().int().min(1).max(9).optional().describe("gastar: nível do espaço."),
+        qtd: z.number().int().min(1).max(9).optional(),
+        tipo: z.enum(["curto", "longo"]).optional().describe("descanso: padrão longo."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    (args) => run(() => ficha(ctx, args)),
+  );
+
+  server.registerTool(
     "salvar_cena",
     {
       title: "Salvar cena",
       description:
-        "Grava em campanhas/<nome>/cena.json, na campanha ativa, onde cada token está (casa, rótulo, visibilidade, imagem), o combate em andamento, a névoa e o inventário, para a próxima sessão começar dali. O salvamento anterior fica em cena.anterior.json. encerrar_combate já salva sozinho; salve também no fim da sessão, quando atualizar o \"Onde paramos\" do resumo.",
+        "Grava a cena na campanha ativa: o mapa, cada token (casa, rótulo, visibilidade, imagem, tamanho e escala), o combate, a névoa e o inventário, para voltar depois com restaurar_cena. Com `nome`, grava em campanhas/<campanha>/cenas/<nome>.json (uma por lugar: \"Taverna\", \"Caverna\"); sem nome, na última cena usada (ou em cena.json). O salvamento anterior de cada cena fica guardado. encerrar_combate já salva sozinho; salve também no fim da sessão e antes de trocar de lugar.",
       inputSchema: {
+        nome: z.string().max(50).optional().describe('Nome da cena, ex.: "Taverna". Sem nome: a última usada.'),
         motivo: z.string().max(80).optional().describe('Por que salvou, ex.: "fim da sessão".'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
@@ -103,12 +124,14 @@ export function registerTools(server: McpServer, ctx: ActionContext): void {
     {
       title: "Restaurar cena",
       description:
-        "Recoloca a mesa como estava no cena.json da campanha ativa: move os tokens que estão na cena para a casa salva (e acerta rótulo e visibilidade), recria os que sumiram se forem do catálogo de tokens, volta o combate (se não houver outro), a névoa e o inventário (se a sala estiver sem). Recusa se o mapa aberto for outro. Use `previa: true` antes para ver o que mudaria.",
+        "Volta uma cena salva da campanha ativa. Numa cena vazia do Owlbear, cria o mapa e todos os tokens com a imagem e o tamanho originais; numa cena com o mesmo mapa, move os tokens para a casa salva, acerta rótulo e visibilidade e recria os que sumiram. Volta também o combate (se não houver outro), a névoa e o inventário (se a sala estiver sem). Recusa outra sala ou outro mapa. `listar: true` mostra as cenas salvas; `previa: true` mostra o que mudaria. A extensão não cria cenas no Owlbear: para montar uma cena guardada, peça ao mestre para abrir uma cena vazia.",
       inputSchema: {
+        nome: z.string().max(50).optional().describe("Nome da cena. Sem nome: a última usada."),
+        listar: z.boolean().optional().describe("true só lista as cenas salvas."),
         previa: z.boolean().optional().describe("true só mostra o que mudaria, sem mexer na mesa."),
-        anterior: z.boolean().optional().describe("true usa o salvamento anterior (cena.anterior.json)."),
+        anterior: z.boolean().optional().describe("true usa o salvamento anterior dessa cena."),
         remover_sobras: z.boolean().optional().describe("true tira da cena os tokens que não estavam no salvamento."),
-        forcar: z.boolean().optional().describe("true restaura mesmo com outro mapa aberto."),
+        forcar: z.boolean().optional().describe("true restaura mesmo em outra sala ou com outro mapa aberto."),
       },
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
@@ -323,7 +346,7 @@ export function registerTools(server: McpServer, ctx: ActionContext): void {
     {
       title: "Inventário",
       description:
-        "Lê ou muda o inventário dos personagens, que fica na aba Inventário do painel. Os jogadores editam o próprio inventário direto no painel; use isto para consultar (antes de saber se alguém tem uma corda, por exemplo) e para entregar saque ou cobrar moedas na história. `ver` sem personagem lista todos.",
+        "Lê ou muda o inventário dos personagens, que fica na aba Inventário do painel. Os jogadores editam o próprio inventário direto no painel; use isto para consultar (antes de saber se alguém tem uma corda, por exemplo) e para entregar saque ou cobrar moedas na história. `ver` sem personagem lista todos. `criar` monta o personagem a partir da ficha numa chamada só (equipamento em `itens`, moedas iniciais em po/pp/pc, `jogador`); pode repetir sem duplicar: itens que já existem e moedas de quem já existe ficam como estão. `dar` também aceita `itens` (saque inteiro de uma vez).",
       inputSchema: {
         acao: z.enum(["ver", "dar", "tirar", "moedas", "criar"]),
         personagem: z.string().max(40).optional(),
@@ -334,6 +357,11 @@ export function registerTools(server: McpServer, ctx: ActionContext): void {
         pp: z.number().int().optional(),
         pc: z.number().int().optional(),
         jogador: z.string().max(60).optional().describe("Ao criar: nome no Owlbear de quem controla o personagem."),
+        itens: z
+          .array(z.object({ nome: z.string().min(1).max(60), qtd: z.number().int().min(1).optional(), nota: z.string().max(120).optional() }))
+          .max(40)
+          .optional()
+          .describe("Vários itens de uma vez (criar e dar)."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
     },

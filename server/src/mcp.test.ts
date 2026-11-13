@@ -86,6 +86,7 @@ describe("servidor MCP", () => {
         "criar_token",
         "editar_token",
         "encerrar_combate",
+        "ficha",
         "focar_camera",
         "iniciar_combate",
         "inventario",

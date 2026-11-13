@@ -1,0 +1,38 @@
+{
+  "fonte": "System Reference Document 5.2.1 (Wizards of the Coast), licença CC-BY-4.0. Tabelas de classe transcritas à mão do SRD.",
+  "_formato": "Listas com 20 posições, uma por nível (posição 0 = nível 1). espacos[n] = espaços de magia por nível de magia (1º, 2º, ...). Bruxo usa magiaDePacto: quantidade de espaços e o nível deles.",
+  "progressoes": {
+    "completo": [[2], [3], [4, 2], [4, 3], [4, 3, 2], [4, 3, 3], [4, 3, 3, 1], [4, 3, 3, 2], [4, 3, 3, 3, 1], [4, 3, 3, 3, 2], [4, 3, 3, 3, 2, 1], [4, 3, 3, 3, 2, 1], [4, 3, 3, 3, 2, 1, 1], [4, 3, 3, 3, 2, 1, 1], [4, 3, 3, 3, 2, 1, 1, 1], [4, 3, 3, 3, 2, 1, 1, 1], [4, 3, 3, 3, 2, 1, 1, 1, 1], [4, 3, 3, 3, 3, 1, 1, 1, 1], [4, 3, 3, 3, 3, 2, 1, 1, 1], [4, 3, 3, 3, 3, 2, 2, 1, 1]],
+    "meio": [[2], [2], [3], [3], [4, 2], [4, 2], [4, 3], [4, 3], [4, 3, 2], [4, 3, 2], [4, 3, 3], [4, 3, 3], [4, 3, 3, 1], [4, 3, 3, 1], [4, 3, 3, 2], [4, 3, 3, 2], [4, 3, 3, 3, 1], [4, 3, 3, 3, 1], [4, 3, 3, 3, 2], [4, 3, 3, 3, 2]]
+  },
+  "classes": {
+    "bardo": { "nome": "Bardo", "atributo": "car", "dadoVida": 8, "progressao": "completo",
+      "truques": [2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+      "preparadas": [4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22] },
+    "clerigo": { "nome": "Clérigo", "atributo": "sab", "dadoVida": 8, "progressao": "completo",
+      "truques": [3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+      "preparadas": [4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22] },
+    "druida": { "nome": "Druida", "atributo": "sab", "dadoVida": 8, "progressao": "completo",
+      "truques": [2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+      "preparadas": [4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22] },
+    "feiticeiro": { "nome": "Feiticeiro", "atributo": "car", "dadoVida": 6, "progressao": "completo",
+      "truques": [4, 4, 4, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
+      "preparadas": [2, 4, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22] },
+    "mago": { "nome": "Mago", "atributo": "int", "dadoVida": 6, "progressao": "completo",
+      "truques": [3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+      "preparadas": [4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 18, 19, 21, 22, 23, 24, 25],
+      "grimorio": "Começa com 6 magias de 1º nível no grimório e ganha 2 a cada nível de mago." },
+    "paladino": { "nome": "Paladino", "atributo": "car", "dadoVida": 10, "progressao": "meio",
+      "truques": null,
+      "preparadas": [2, 3, 4, 5, 6, 6, 7, 7, 9, 9, 10, 10, 11, 11, 12, 12, 14, 14, 15, 15],
+      "sempre": { "2": ["divine-smite"] } },
+    "patrulheiro": { "nome": "Patrulheiro", "atributo": "sab", "dadoVida": 10, "progressao": "meio",
+      "truques": null,
+      "preparadas": [2, 3, 4, 5, 6, 6, 7, 7, 9, 9, 10, 10, 11, 11, 12, 12, 14, 14, 15, 15],
+      "sempre": { "1": ["hunters-mark"] } },
+    "bruxo": { "nome": "Bruxo", "atributo": "car", "dadoVida": 8, "progressao": "pacto",
+      "truques": [2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+      "preparadas": [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15],
+      "magiaDePacto": { "espacos": [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4], "nivel": [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5] } }
+  }
+}

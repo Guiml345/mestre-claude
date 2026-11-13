@@ -2,7 +2,7 @@
 import { WebSocket } from "ws";
 import type { BridgeInfo, TableLink } from "./bridge.js";
 import { MesaError, errorCode, errorMessage } from "./errors.js";
-import type { Announcement, Combat, FogArea, Inventory, GridInfo, ItemUpdate, PlayerMessage, RawItem, TableState, WireMessage } from "./protocol.js";
+import type { Announcement, Combat, FogArea, Fichas, Inventory, GridInfo, ItemUpdate, PlayerMessage, RawItem, RestoreImage, TableState, WireMessage } from "./protocol.js";
 
 export const SQUARE_GRID: GridInfo = {
   dpi: 150,
@@ -73,6 +73,7 @@ export class FakeTable {
   fogEnabled = true;
   paused = false;
   inventory: Inventory = { personagens: [] };
+  sheets: Fichas = { personagens: [] };
   focused: Array<{ x: number; y: number; w: number; h: number }> = [];
   fogFilled = false;
   fog: FogArea[] = [];
@@ -142,6 +143,11 @@ export class FakeTable {
         return { nevoa: this.fogEnabled, pausado: this.paused, narracao: "media", dificuldade: "padrao", regras: true };
       case "fogState":
         return { filled: this.fogFilled, areas: structuredClone(this.fog) };
+      case "getSheets":
+        return structuredClone(this.sheets);
+      case "setSheets":
+        this.sheets = structuredClone((params as { sheets: Fichas }).sheets);
+        return { saved: true };
       case "getInventory":
         return structuredClone(this.inventory);
       case "setInventory":
@@ -152,6 +158,19 @@ export class FakeTable {
         const ids = tokens.map((t, i) => {
           const id = `img-${this.items.length}-${i}`;
           this.items.push({ id, type: "IMAGE", name: t.name, layer: "CHARACTER", position: { ...t.position }, rotation: 0, scale: { x: 1, y: 1 }, visible: t.visible ?? true, locked: false, text: t.text, image: { width: size, height: size, url: "" }, grid: { dpi: size, offset: { x: size / 2, y: size / 2 } } });
+          return id;
+        });
+        return { ids };
+      }
+      case "restoreImages": {
+        const { images } = params as { images: RestoreImage[] };
+        const ids = images.map((img, i) => {
+          const id = `rest-${this.items.length}-${i}`;
+          this.items.push({
+            id, type: "IMAGE", name: img.name, layer: img.layer, position: { ...img.position }, rotation: img.rotation, scale: { ...img.scale },
+            visible: img.visible, locked: img.locked, text: img.text,
+            image: { width: img.width, height: img.height, url: img.url, mime: img.mime }, grid: structuredClone(img.grid),
+          });
           return id;
         });
         return { ids };

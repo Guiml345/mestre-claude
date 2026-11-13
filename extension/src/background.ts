@@ -20,6 +20,8 @@ import {
   COMBAT_KEY,
   CONFIG_KEY,
   INVENTORY_KEY,
+  SHEETS_KEY,
+  parseSheets,
   SAY_KEY,
   VERSION,
   appendLog,
@@ -160,7 +162,7 @@ function serialize(item: Item): RawItem {
   if (item.attachedTo) raw.attachedTo = item.attachedTo;
   if (isImage(item)) {
     raw.text = item.text?.plainText ?? "";
-    raw.image = { width: item.image.width, height: item.image.height, url: item.image.url };
+    raw.image = { width: item.image.width, height: item.image.height, url: item.image.url, mime: item.image.mime };
     raw.grid = { dpi: item.grid.dpi, offset: { x: item.grid.offset.x, y: item.grid.offset.y } };
   }
   return raw;
@@ -271,6 +273,50 @@ async function addImages(params: unknown): Promise<{ ids: string[] }> {
         .build();
     });
   if (items.length === 0) throw new TableError("BAD_REQUEST", "Nenhuma posição válida para criar tokens.");
+  await OBR.scene.items.addItems(items);
+  return { ids: items.map((item) => item.id) };
+}
+
+/** Endereços de imagens que podem voltar numa cena restaurada: o catálogo e as imagens do próprio Owlbear. */
+const RESTORE_HOSTS = [...IMAGE_HOSTS, "https://images.owlbear.rodeo/"];
+const RESTORE_LAYERS = ["MAP", "CHARACTER", "MOUNT", "PROP"] as const;
+
+function finite(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+/** Recria imagens de uma cena salva (mapa e tokens), com tamanho, grade e escala originais. */
+async function restoreImages(params: unknown): Promise<{ ids: string[] }> {
+  await requireScene();
+  const list = (params as { images?: unknown } | undefined)?.images;
+  if (!Array.isArray(list)) throw new TableError("BAD_REQUEST", "restoreImages precisa de uma lista `images`.");
+  const items = (list.slice(0, 60) as Array<Record<string, any>>).map((spec) => {
+    const url = typeof spec.url === "string" ? spec.url : "";
+    if (!RESTORE_HOSTS.some((host) => url.startsWith(host))) {
+      throw new TableError("BAD_REQUEST", `Imagem de endereço não permitido: ${url.slice(0, 80)}`);
+    }
+    const layer = RESTORE_LAYERS.find((name) => name === spec.layer) ?? "CHARACTER";
+    if (!isFinitePoint(spec.position)) throw new TableError("BAD_REQUEST", "Posição inválida.");
+    const width = finite(spec.width, 256);
+    const height = finite(spec.height, 256);
+    const grid = spec.grid ?? {};
+    const mime = typeof spec.mime === "string" && spec.mime.startsWith("image/") ? spec.mime : "image/png";
+    const label = typeof spec.text === "string" ? spec.text.slice(0, 60) : "";
+    const builder = buildImage(
+      { width, height, mime, url },
+      { dpi: finite(grid.dpi, width), offset: { x: finite(grid.offset?.x, width / 2), y: finite(grid.offset?.y, height / 2) } },
+    )
+      .name(typeof spec.name === "string" ? spec.name.slice(0, 60) : label || "Token")
+      .layer(layer)
+      .position({ x: spec.position.x, y: spec.position.y })
+      .scale({ x: finite(spec.scale?.x, 1), y: finite(spec.scale?.y, 1) })
+      .rotation(finite(spec.rotation, 0))
+      .visible(typeof spec.visible === "boolean" ? spec.visible : true)
+      .locked(spec.locked === true);
+    if (layer !== "MAP") builder.plainText(label);
+    return builder.build();
+  });
+  if (items.length === 0) throw new TableError("BAD_REQUEST", "Nenhuma imagem para recriar.");
   await OBR.scene.items.addItems(items);
   return { ids: items.map((item) => item.id) };
 }
@@ -398,10 +444,17 @@ const handlers: Record<string, (params: unknown) => Promise<unknown>> = {
   announce,
   cloneItems,
   addImages,
+  restoreImages,
   deleteItems,
   getCombat,
   setCombat,
   getConfig: async () => parseConfig((await OBR.room.getMetadata())[CONFIG_KEY]),
+  getSheets: async () => parseSheets((await OBR.room.getMetadata())[SHEETS_KEY]),
+  setSheets: async (params: unknown) => {
+    const sheets = parseSheets((params as { sheets?: unknown } | undefined)?.sheets);
+    await OBR.room.setMetadata({ [SHEETS_KEY]: sheets });
+    return { saved: true };
+  },
   getInventory: async () => parseInventory((await OBR.room.getMetadata())[INVENTORY_KEY]),
   setInventory: async (params: unknown) => {
     const inventory = parseInventory((params as { inventory?: unknown } | undefined)?.inventory);

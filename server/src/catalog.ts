@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { normalize } from "./grid.js";
 
@@ -52,6 +52,33 @@ export function searchCatalog(list: CatalogIcon[], query: string, limit = 25): C
     }))
     .sort((a, b) => a.score - b.score);
   return scored.slice(0, limit).map((s) => s.icon);
+}
+
+/** Papel comum de RPG (em português) com o ícone já conferido. Fica em server/papeis.json. */
+export interface Role {
+  nome: string;
+  icone: string;
+  grupo: string;
+  sinonimos: string[];
+  alternativas: string[];
+}
+
+/** Lê os papéis. Sem o arquivo, a lista fica vazia (o catálogo continua funcionando em inglês). */
+export async function loadRoles(file: string | undefined): Promise<Role[]> {
+  if (!file) return [];
+  const text = await readFile(file, "utf8").catch(() => null);
+  if (text === null) return [];
+  const data = JSON.parse(text) as { papeis?: Record<string, { icone?: string; grupo?: string; sinonimos?: string[]; alternativas?: string[] }> };
+  return Object.entries(data.papeis ?? {})
+    .filter(([, r]) => typeof r.icone === "string" && r.icone.includes("/"))
+    .map(([nome, r]) => ({ nome, icone: r.icone!, grupo: r.grupo ?? "outros", sinonimos: r.sinonimos ?? [], alternativas: r.alternativas ?? [] }));
+}
+
+/** Acha o papel pelo nome ou sinônimo, ignorando acentos e maiúsculas. */
+export function findRole(roles: Role[], query: string): Role | null {
+  const key = normalize(query).replace(/-/g, " ");
+  const same = (text: string) => normalize(text).replace(/-/g, " ") === key;
+  return roles.find((r) => same(r.nome)) ?? roles.find((r) => r.sinonimos.some(same)) ?? null;
 }
 
 /** Acha um ícone exato ("goblin" ou "lorc/wolf-head"); se não houver, o melhor da busca. */

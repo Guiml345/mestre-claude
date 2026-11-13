@@ -82,7 +82,7 @@ describe("salvar_cena e restaurar_cena", () => {
     table.items.push(token("dddddddd-4444", "Dragão", 15, 10));
 
     const text = await restaurarCena(ctx);
-    assert.match(text, /Recriei 1 token\(s\) do catálogo: "Lobo" em \(2, 2\)/);
+    assert.match(text, /Recriei 1 token\(s\): "Lobo" em \(2, 2\)/);
     assert.match(text, /Não dá para recriar.*"Goblin"/);
     assert.match(text, /1 token\(s\) não estavam na cena salva: "Dragão"\. Ficaram/);
     const lobo = table.items.find((item) => item.text === "Lobo")!;
@@ -124,6 +124,53 @@ describe("salvar_cena e restaurar_cena", () => {
     assert.match(await restaurarCena(ctx, { forcar: true }), /Restaurando/);
   });
 
+  it("monta a cena inteira numa cena vazia: mapa e tokens com imagem e tamanho originais", async () => {
+    const owlbear = "https://images.owlbear.rodeo/shared/items/owlbear-characters";
+    const table = new FakeTable([
+      { ...mapItem("map-0001", "Caverna", 20, 14), image: { width: 1400, height: 980, url: `${owlbear}/caverna.jpg`, mime: "image/jpeg" } },
+      token("aaaaaaaa-1111", "Wizard", 6, 3, { image: { width: 300, height: 300, url: `${owlbear}/Wizard.png` } }),
+      // Dragão de 2×2 casas (escala 2).
+      token("bbbbbbbb-2222", "Dragão", 10, 5, { scale: { x: 2, y: 2 }, position: { x: 11 * 150, y: 6 * 150 }, image: { width: 300, height: 300, url: CATALOG_URL } }),
+    ]);
+    const ctx: ActionContext = { table: memoryLink(table), campaignDir: async () => dir };
+    assert.match(await salvarCena(ctx, { nome: "Caverna dos lobos" }), /caverna-dos-lobos\.json/);
+
+    table.items = [];
+    const preview = await restaurarCena(ctx, { previa: true });
+    assert.match(preview, /Criaria o mapa "Caverna"/);
+    assert.equal(table.items.length, 0);
+
+    const text = await restaurarCena(ctx);
+    assert.match(text, /cena "caverna-dos-lobos"/);
+    assert.match(text, /Criei o mapa "Caverna" na cena vazia/);
+    assert.match(text, /Recriei 2 token/);
+    const map = table.items.find((item) => item.layer === "MAP")!;
+    assert.equal(map.image?.url, `${owlbear}/caverna.jpg`);
+    assert.equal(map.image?.mime, "image/jpeg");
+    assert.equal(map.locked, true);
+    const dragon = table.items.find((item) => item.text === "Dragão")!;
+    assert.deepEqual(dragon.scale, { x: 2, y: 2 });
+    assert.deepEqual(dragon.position, { x: 11 * 150, y: 6 * 150 });
+    assert.equal(table.items.find((item) => item.text === "Wizard")!.image?.url, `${owlbear}/Wizard.png`);
+  });
+
+  it("guarda várias cenas com nome e lembra a última usada", async () => {
+    const { table, ctx } = setup();
+    await salvarCena(ctx, { nome: "Taverna" });
+    table.items[0] = mapItem("map-0002", "Caverna", 20, 14);
+    await salvarCena(ctx, { nome: "Caverna" });
+    assert.match(await restaurarCena(ctx, { listar: true }), /Cenas salvas: caverna \(a atual\), taverna\./);
+
+    // Sem nome, salva na última usada (a caverna), não na cena.json.
+    await salvarCena(ctx, { motivo: "fim do combate" });
+    assert.equal(JSON.parse(await readFile(path.join(dir, "cenas", "caverna.json"), "utf8")).motivo, "fim do combate");
+    await assert.rejects(readFile(path.join(dir, "cena.json"), "utf8"));
+
+    // Restaurar a taverna com a caverna aberta recusa; e passa a ser a atual só se ler.
+    await assert.rejects(restaurarCena(ctx, { nome: "taverna" }), /mapa "Taverna"/);
+    assert.match(await restaurarCena(ctx, { nome: "Nenhuma" }), /Não há cena salva.*Cenas com nome: caverna, taverna/);
+  });
+
   it("diz quando não há cena salva", async () => {
     const { ctx } = setup();
     assert.match(await restaurarCena(ctx), /Não há cena salva/);
@@ -151,5 +198,26 @@ describe("matchTokens", () => {
     assert.deepEqual(pairs.map((p) => [p.saved.id, p.item.id]), [["a", "a"], ["b", "x"]]);
     assert.deepEqual(missing.map((m) => m.id), ["c"]);
     assert.deepEqual(extra.map((e) => e.id), ["z"]);
+  });
+});
+
+describe("salvar_cena sem nome", () => {
+  it("não sobrescreve a última cena se o mapa aberto for outro", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "mesa-cena-"));
+    try {
+      const table = new FakeTable([mapItem("map-0001", "Vila", 20, 14), token("aaaaaaaa-1111", "Guilherme", 6, 3)]);
+      const ctx: ActionContext = { table: memoryLink(table), campaignDir: async () => dir };
+      await salvarCena(ctx, { nome: "Vila" });
+      table.items[0] = mapItem("map-0002", "Prisão", 20, 14);
+      await assert.rejects(salvarCena(ctx), /última cena salva \("vila"\) é do mapa "Vila", mas a cena aberta tem o mapa "Prisão"/);
+      // O fim do combate só avisa, sem estragar a cena da vila.
+      table.combat = { rodada: 1, vez: 0, combatentes: [{ id: "c1", nome: "Guilherme", iniciativa: 15, pv: 20, pvMax: 24, lado: "jogador", condicoes: [] }] };
+      assert.match(await encerrarCombate(ctx), /não consegui salvar a cena/);
+      const vila = JSON.parse(await readFile(path.join(dir, "cenas", "vila.json"), "utf8"));
+      assert.equal(vila.mapa, "Vila");
+      assert.match(await salvarCena(ctx, { nome: "Prisão" }), /prisao\.json/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -17,14 +17,17 @@ import {
   requireSquare,
   resolveToken,
 } from "./grid.js";
-import type { AnnounceVariant, Announcement, Combat, FogState, GridInfo, InventoryCharacter, ItemUpdate, RawItem, RequestOptions, TableConfig } from "./protocol.js";
+import type { AnnounceVariant, Announcement, Combat, FogState, GridInfo, InventoryCharacter, ItemUpdate, RawItem, RequestOptions, RestoreImage, TableConfig, Vec2 } from "./protocol.js";
 import type { RollLogEntry } from "./rolllog.js";
 import { renderMap, type MapArea, type MapView } from "./mapview.js";
-import { CATALOG_SIZE, iconUrl, loadCatalog, resolveIcon, searchCatalog } from "./catalog.js";
+import { CATALOG_SIZE, findRole, iconUrl, loadCatalog, loadRoles, resolveIcon, searchCatalog, type CatalogIcon, type Role } from "./catalog.js";
 import { activeCampaignDir, campaignForRoom, createCampaign, describeCampaign, getActiveCampaign, linkRoom, listCampaigns, setActiveCampaign, slugify, unlinkRoom } from "./campaigns.js";
-import { canRecreate, matchTokens, readSnapshot, writeSnapshot, type SavedToken, type SceneSnapshot } from "./cenas.js";
+import { canRecreate, isRestorableUrl, listScenes, matchTokens, readSnapshot, writeSnapshot, type SavedImage, type SavedToken, type SceneSnapshot } from "./cenas.js";
 import path from "node:path";
 import { addCombatants, changeCombatant, describeCombat, findCombatant, nextTurn, startCombat, type CombatantChange, type NewCombatant } from "./combat.js";
+import { describeSheet, loadRulesData, mergeSheets, parseSheet, readSheets, writeSheet } from "./fichas.js";
+import { findSpell, preparableSpells, spellLimits } from "./regras.js";
+import type { Ficha } from "./protocol.js";
 
 export interface ActionContext {
   table: TableLink;
@@ -36,6 +39,10 @@ export interface ActionContext {
   campaignDir?: () => Promise<string>;
   /** Pasta icons/ com o catálogo do game-icons.net. */
   iconsDir?: string;
+  /** Papéis comuns em português (server/papeis.json). */
+  rolesFile?: string;
+  /** Pasta com magias.json e classes.json (extension/public/dados). */
+  dataDir?: string;
   /** Quanto esperar por uma mesa antes de desistir (padrão da ponte se omitido). */
   waitTableMs?: number;
   now?: () => Date;
@@ -696,12 +703,42 @@ async function syncMarkers(ctx: ActionContext, tokenName: string | undefined, co
 }
 
 export async function alterarCombatente(ctx: ActionContext, args: CombatantChange & { nome: string }): Promise<string> {
-  const before = findCombatant(await requireCombat(ctx), args.nome);
-  const { combat, c, note } = changeCombatant(await requireCombat(ctx), args.nome, args);
+  const current = await requireCombat(ctx);
+  const before = findCombatant(current, args.nome);
+  const { combat, c, note } = changeCombatant(current, args.nome, args);
   await saveCombat(ctx, combat);
   await syncMarkers(ctx, before.token, c ? c.condicoes : []);
-  return `${note}
+  const sheetNote = await syncSheetsHp(ctx, combat);
+  return `${note}${sheetNote}
 ${describeCombat(combat)}`;
+}
+
+/**
+ * Leva os PV dos personagens jogadores do combate para a ficha deles (painel e arquivo),
+ * para a ficha não ficar com PV cheio depois da luta. Nunca falha a ação de combate.
+ */
+async function syncSheetsHp(ctx: ActionContext, combat: Combat): Promise<string> {
+  if (!ctx.dataDir || (!ctx.campaignDir && !ctx.campaignsRoot)) return "";
+  try {
+    const players = combat.combatentes.filter((c) => c.lado === "jogador");
+    if (!players.length) return "";
+    const { fichas, dir, roomOk } = await loadAllSheets(ctx);
+    const changed: string[] = [];
+    for (const p of players) {
+      const keys = [p.nome, p.token ?? ""].map(normalize).filter(Boolean);
+      const f = fichas.find((x) => keys.includes(normalize(x.nome)) || keys.includes(normalize(x.token ?? "")));
+      if (!f || f.pv.atual === p.pv) continue;
+      f.pv.atual = Math.min(p.pv, f.pv.max);
+      f.atualizadoEm = (ctx.now?.() ?? new Date()).toISOString();
+      await writeSheet(dir, f);
+      changed.push(`${f.nome} ${f.pv.atual}/${f.pv.max}`);
+    }
+    if (!changed.length) return "";
+    if (roomOk) await pushSheets(ctx, fichas);
+    return ` Ficha atualizada: ${changed.join(", ")}.`;
+  } catch {
+    return "";
+  }
 }
 
 export async function verCombate(ctx: ActionContext): Promise<string> {
@@ -787,6 +824,10 @@ export async function turnoMonstro(ctx: ActionContext, args: TurnoMonstroArgs): 
   if (advance) combat = nextTurn(combat);
   if (changed || advance) await saveCombat(ctx, combat);
   if (advance) await announceTurn(ctx, combat);
+  if (changed) {
+    const sheetNote = await syncSheetsHp(ctx, combat);
+    if (sheetNote) lines.push(sheetNote.trim());
+  }
   lines.push(describeCombat(combat));
   return lines.join("\n");
 }
@@ -960,6 +1001,16 @@ export interface InventarioArgs {
   pc?: number;
   /** Ao criar: nome no Owlbear de quem controla. */
   jogador?: string;
+  /** Vários itens de uma vez (criar e dar). */
+  itens?: Array<{ nome: string; qtd?: number; nota?: string }>;
+}
+
+/** Junta `item` e `itens` numa lista só, sem nomes vazios. */
+function wantedItems(args: InventarioArgs): Array<{ nome: string; qtd: number; nota?: string }> {
+  const list = [...(args.item?.trim() ? [{ nome: args.item, qtd: args.qtd, nota: args.nota }] : []), ...(args.itens ?? [])];
+  return list
+    .map((i) => ({ nome: i.nome.trim().slice(0, 60), qtd: Math.max(1, Math.trunc(i.qtd ?? 1)), nota: i.nota?.trim() || undefined }))
+    .filter((i) => i.nome);
 }
 
 function newId(): string {
@@ -992,24 +1043,50 @@ export async function inventario(ctx: ActionContext, args: InventarioArgs): Prom
       return list.length ? list.map(describeCharacter).join("\n") : "Inventário vazio: nenhum personagem cadastrado.";
     }
     case "criar": {
+      // Monta o personagem a partir da ficha. Pode repetir sem duplicar: itens que já
+      // existem (pelo nome) ficam como estão, e as moedas só entram num personagem novo.
       const name = args.personagem?.trim();
       if (!name) throw new MesaError("BAD_REQUEST", "Diga o nome do personagem.");
-      if (inv.personagens.some((c) => normalize(c.nome) === normalize(name))) return `${name} já está no inventário.`;
-      inv.personagens.push({ id: newId(), nome: name.slice(0, 40), jogador: args.jogador?.trim() || undefined, moedas: { po: 0, pp: 0, pc: 0 }, itens: [] });
+      let c = inv.personagens.find((p) => normalize(p.nome) === normalize(name));
+      const isNew = !c;
+      if (!c) {
+        c = { id: newId(), nome: name.slice(0, 40), jogador: args.jogador?.trim() || undefined, moedas: { po: 0, pp: 0, pc: 0 }, itens: [] };
+        inv.personagens.push(c);
+      } else if (!c.jogador && args.jogador?.trim()) {
+        c.jogador = args.jogador.trim();
+      }
+      if (isNew) {
+        for (const coin of ["po", "pp", "pc"] as const) c.moedas[coin] = Math.max(0, Math.trunc(args[coin] ?? 0));
+      }
+      const added: string[] = [];
+      for (const it of wantedItems(args)) {
+        if (c.itens.some((i) => normalize(i.nome) === normalize(it.nome))) continue;
+        c.itens.push({ id: newId(), nome: it.nome, qtd: it.qtd, nota: it.nota });
+        added.push(it.nome);
+      }
       await save();
-      return `${name} adicionado ao inventário.`;
+      const head = isNew ? `${c.nome} criado no inventário` : `${c.nome} já estava no inventário`;
+      return `${head}${added.length ? `; entraram ${added.length} item(ns)` : isNew ? "" : "; nenhum item novo"}.\n${describeCharacter(c)}`;
     }
     case "dar":
     case "tirar": {
       const c = find(args.personagem);
+      if (args.acao === "dar") {
+        const list = wantedItems(args);
+        if (!list.length) throw new MesaError("BAD_REQUEST", "Diga qual item (ou `itens`).");
+        for (const it of list) {
+          const existing = c.itens.find((i) => normalize(i.nome) === normalize(it.nome));
+          if (existing) existing.qtd += it.qtd;
+          else c.itens.push({ id: newId(), nome: it.nome, qtd: it.qtd, nota: it.nota });
+        }
+        await save();
+        return describeCharacter(c);
+      }
       const itemName = args.item?.trim();
       if (!itemName) throw new MesaError("BAD_REQUEST", "Diga qual item.");
       const qty = Math.max(1, Math.trunc(args.qtd ?? 1));
       const existing = c.itens.find((i) => normalize(i.nome) === normalize(itemName));
-      if (args.acao === "dar") {
-        if (existing) existing.qtd += qty;
-        else c.itens.push({ id: newId(), nome: itemName.slice(0, 60), qtd: qty, nota: args.nota?.trim() || undefined });
-      } else {
+      {
         if (!existing) throw new MesaError("BAD_REQUEST", `${c.nome} não tem "${itemName}". ${describeCharacter(c)}`);
         existing.qtd -= qty;
         if (existing.qtd <= 0) c.itens = c.itens.filter((i) => i !== existing);
@@ -1111,10 +1188,10 @@ export async function campanha(ctx: ActionContext, args: CampanhaArgs): Promise<
 // ------------------------------------------------------------ catálogo de tokens
 
 export interface CatalogoArgs {
-  /** buscar: lista ícones pelo nome (em inglês); criar: põe tokens com o ícone no mapa. */
-  acao: "buscar" | "criar";
-  /** Nome do ícone em inglês (ex.: "goblin", "wolf head") ou "autor/nome". */
-  icone: string;
+  /** buscar: lista ícones pelo nome (em inglês); criar: põe tokens com o ícone no mapa; papeis: lista os papéis prontos. */
+  acao: "buscar" | "criar" | "papeis";
+  /** Papel em português (ex.: "guarda", "goblin"), nome do ícone em inglês ou "autor/nome". */
+  icone?: string;
   quantidade?: number;
   /** Rótulo dos tokens (ex.: "Lobo"); vira "Lobo 2", "Lobo 3"... quando já existe. */
   rotulo?: string;
@@ -1130,16 +1207,40 @@ export interface CatalogoArgs {
 export async function catalogoTokens(ctx: ActionContext, args: CatalogoArgs): Promise<string> {
   const list = await loadCatalog(ctx.iconsDir ?? "");
   if (list.length === 0) throw new MesaError("NO_CATALOG", "O catálogo de ícones está vazio (falta a pasta icons/).");
+  const roles = await loadRoles(ctx.rolesFile).catch(() => [] as Role[]);
 
-  if (args.acao === "buscar") {
-    const found = searchCatalog(list, args.icone);
-    return found.length
-      ? `Ícones para "${args.icone}" (${found.length}${found.length === 25 ? "+" : ""}): ${found.map((i) => `${i.author}/${i.name}`).join(", ")}`
-      : `Nenhum ícone com "${args.icone}". Os nomes são em inglês: tente outra palavra (ex.: wolf, skull, dragon).`;
+  if (args.acao === "papeis") {
+    if (roles.length === 0) return "Nenhum papel pronto (falta server/papeis.json).";
+    const groups = new Map<string, string[]>();
+    for (const r of roles) groups.set(r.grupo, [...(groups.get(r.grupo) ?? []), r.nome]);
+    return [
+      `Papéis prontos (${roles.length}), com ícone já conferido. Use o nome em \`icone\`; sinônimos também valem (ex.: "soldado" = guarda, "padre" = clérigo).`,
+      ...[...groups].map(([g, names]) => `• ${g}: ${names.join(", ")}`),
+    ].join("\n");
   }
 
-  const { icon, options } = resolveIcon(list, args.icone);
-  if (!icon) throw new MesaError("NO_CATALOG", `Nenhum ícone com "${args.icone}". Use acao buscar com outra palavra, em inglês.`);
+  const query = args.icone?.trim() ?? "";
+  if (!query) throw new MesaError("BAD_REQUEST", "Diga o papel ou o ícone em `icone`.");
+  const role = findRole(roles, query);
+
+  if (args.acao === "buscar") {
+    const found = searchCatalog(list, query);
+    const head = role ? `Papel pronto "${role.nome}": ${role.icone}${role.alternativas.length ? ` (alternativas: ${role.alternativas.join(", ")})` : ""}.\n` : "";
+    return found.length
+      ? `${head}Ícones para "${query}" (${found.length}${found.length === 25 ? "+" : ""}): ${found.map((i) => `${i.author}/${i.name}`).join(", ")}`
+      : `${head}${role ? "" : `Nenhum ícone com "${query}". Os nomes são em inglês: tente outra palavra (ex.: wolf, skull, dragon), ou veja os papéis prontos com acao papeis.`}`.trim();
+  }
+
+  let icon: CatalogIcon | null;
+  let options: CatalogIcon[] = [];
+  if (role) {
+    const [author, name] = role.icone.split("/");
+    icon = list.find((i) => i.author === author && i.name === name) ?? null;
+    if (!icon) throw new MesaError("NO_CATALOG", `O papel "${role.nome}" aponta para ${role.icone}, que não está no catálogo. Corrija server/papeis.json.`);
+  } else {
+    ({ icon, options } = resolveIcon(list, query));
+  }
+  if (!icon) throw new MesaError("NO_CATALOG", `Nenhum ícone com "${query}". Veja os papéis prontos (acao papeis) ou use acao buscar com outra palavra, em inglês.`);
   const count = Math.trunc(args.quantidade ?? 1);
   if (count < 1 || count > 10) throw new MesaError("BAD_REQUEST", "Dá para criar de 1 a 10 tokens por vez.");
 
@@ -1168,7 +1269,8 @@ export async function catalogoTokens(ctx: ActionContext, args: CatalogoArgs): Pr
     cells.push(...freeCellsAround(model, anchor, count - cells.length, blockers, grid, bounds));
   }
 
-  const base = (args.rotulo ?? icon.name.replace(/-/g, " ")).trim();
+  const fallbackLabel = role ? role.nome.charAt(0).toUpperCase() + role.nome.slice(1) : icon.name.replace(/-/g, " ");
+  const base = (args.rotulo ?? fallbackLabel).trim();
   const used = items.filter((item) => TOKEN_LAYERS.includes(item.layer)).map((item) => normalize(displayName(item)));
   let next = used.some((n) => n === normalize(base) || n.startsWith(`${normalize(base)} `)) ? 2 : count > 1 ? 1 : 1;
   const labels: string[] = [];
@@ -1199,7 +1301,7 @@ export async function catalogoTokens(ctx: ActionContext, args: CatalogoArgs): Pr
   await focusCells(ctx, grid, union(cells.map((c) => ({ col: c.col, row: c.row, w: 1, h: 1 }))));
   const others = options.filter((o) => o !== icon).slice(0, 5).map((o) => `${o.author}/${o.name}`);
   return [
-    `Criei ${count} token(s) com o ícone ${icon.author}/${icon.name}:`,
+    `Criei ${count} token(s) com o ícone ${icon.author}/${icon.name}${role ? ` (papel "${role.nome}")` : ""}:`,
     ...created.map((item) => `• "${displayName(item)}": casa (${footprint(item, grid).col}, ${footprint(item, grid).row}); id ${item.id.slice(0, 8)}`),
     others.length ? `Outros ícones parecidos: ${others.join(", ")}.` : "",
   ].filter(Boolean).join("\n");
@@ -1213,8 +1315,12 @@ async function sceneDir(ctx: ActionContext): Promise<string> {
   throw new MesaError("INTERNAL", "Pasta de campanhas não configurada.");
 }
 
+function findMap(items: RawItem[]): RawItem | undefined {
+  return items.find((item) => item.layer === "MAP" && item.image);
+}
+
 function mapName(items: RawItem[]): string | null {
-  const map = items.find((item) => item.layer === "MAP" && item.image);
+  const map = findMap(items);
   return map ? displayName(map) : null;
 }
 
@@ -1222,17 +1328,73 @@ function sceneTokens(items: RawItem[]): RawItem[] {
   return items.filter((item) => TOKEN_LAYERS.includes(item.layer) && !item.attachedTo);
 }
 
+function savedImage(item: RawItem): SavedImage | undefined {
+  if (!item.image) return undefined;
+  return {
+    url: item.image.url,
+    largura: item.image.width,
+    altura: item.image.height,
+    ...(item.image.mime ? { mime: item.image.mime } : {}),
+    ...(item.grid ? { grade: { dpi: item.grid.dpi, offset: { ...item.grid.offset } } } : {}),
+  };
+}
+
+/** Item de mentira com a geometria salva, para calcular posições. */
+function modelOf(image: SavedImage, scale: Vec2 = { x: 1, y: 1 }): RawItem {
+  return {
+    id: "modelo", type: "IMAGE", name: "", layer: "CHARACTER", position: { x: 0, y: 0 }, rotation: 0, scale, visible: true, locked: false,
+    image: { width: image.largura, height: image.altura, url: image.url },
+    grid: image.grade ?? { dpi: image.largura, offset: { x: image.largura / 2, y: image.altura / 2 } },
+  };
+}
+
+function restoreSpec(s: SavedToken, grid: GridInfo, sameGrid: boolean): RestoreImage {
+  const image = s.imagem!;
+  const scale = s.escala ?? { x: 1, y: 1 };
+  const model = modelOf(image, scale);
+  return {
+    url: image.url,
+    mime: image.mime,
+    width: image.largura,
+    height: image.altura,
+    grid: model.grid!,
+    scale,
+    rotation: s.rotacao ?? 0,
+    layer: (["CHARACTER", "MOUNT", "PROP"].includes(s.camada) ? s.camada : "CHARACTER") as RestoreImage["layer"],
+    position: sameGrid && s.posicao ? s.posicao : positionForCell(model, grid, s.coluna, s.linha),
+    name: s.nome,
+    text: s.rotulo,
+    visible: s.visivel,
+    locked: s.travado ?? false,
+  };
+}
+
+/** Chama restoreImages explicando o que fazer se a extensão for antiga. */
+async function callRestore(ctx: ActionContext, images: RestoreImage[]): Promise<string[]> {
+  try {
+    return (await ctx.table.call("restoreImages", { images }, requestOptions(ctx))).ids;
+  } catch (err) {
+    if (/Método desconhecido/.test(errorMessage(err))) {
+      throw new MesaError("TABLE_ERROR", "A extensão do Owlbear é antiga e não sabe recriar imagens: rode `npm run build` e recarregue a sala do Owlbear.");
+    }
+    throw err;
+  }
+}
+
 export interface SalvarCenaArgs {
+  /** Nome da cena (ex.: "Taverna"). Sem nome, usa a última cena usada ou a cena.json. */
+  nome?: string;
   /** Por que salvou (ex.: "fim da sessão"). */
   motivo?: string;
 }
 
-/** Grava na pasta da campanha onde cada token está, o combate, a névoa e o inventário. */
+/** Grava na pasta da campanha o mapa, os tokens, o combate, a névoa e o inventário. */
 export async function salvarCena(ctx: ActionContext, args: SalvarCenaArgs = {}): Promise<string> {
   const { grid, items, roomId } = await loadScene(ctx);
   requireSquare(grid);
   const tokens: SavedToken[] = sceneTokens(items).map((item) => {
     const fp = footprint(item, grid);
+    const imagem = savedImage(item);
     return {
       id: item.id,
       nome: item.name ?? "",
@@ -1243,9 +1405,14 @@ export async function salvarCena(ctx: ActionContext, args: SalvarCenaArgs = {}):
       largura: fp.w,
       altura: fp.h,
       visivel: item.visible,
-      ...(item.image ? { imagem: { url: item.image.url, largura: item.image.width, altura: item.image.height } } : {}),
+      ...(imagem ? { imagem } : {}),
+      posicao: { ...item.position },
+      escala: { ...item.scale },
+      rotacao: item.rotation,
+      travado: item.locked,
     };
   });
+  const map = findMap(items);
   const combate = await loadCombat(ctx).catch(() => null);
   const fog = await ctx.table.call("fogState", undefined, requestOptions(ctx)).catch(() => null);
   const inventario = await ctx.table.call("getInventory", undefined, requestOptions(ctx)).catch(() => null);
@@ -1254,7 +1421,11 @@ export async function salvarCena(ctx: ActionContext, args: SalvarCenaArgs = {}):
     salvoEm: (ctx.now?.() ?? new Date()).toISOString(),
     ...(args.motivo?.trim() ? { motivo: args.motivo.trim() } : {}),
     ...(roomId ? { sala: roomId } : {}),
-    mapa: mapName(items),
+    mapa: map ? displayName(map) : null,
+    ...(map
+      ? { mapaImagem: { nome: map.name, imagem: savedImage(map)!, posicao: { ...map.position }, escala: { ...map.scale }, rotacao: map.rotation, visivel: map.visible, travado: map.locked } }
+      : {}),
+    grade: { dpi: grid.dpi },
     tokens,
     combate,
     nevoa: fog
@@ -1262,35 +1433,74 @@ export async function salvarCena(ctx: ActionContext, args: SalvarCenaArgs = {}):
       : null,
     inventario,
   };
-  const file = await writeSnapshot(await sceneDir(ctx), snapshot);
+  const dir = await sceneDir(ctx);
+  // Sem nome, a cena vai para a última usada; não sobrescreve uma cena de outro mapa
+  // (ex.: o mestre trocou de cena no Owlbear e o fim do combate salvaria por cima).
+  if (args.nome === undefined) {
+    const previous = await readSnapshot(dir, {}).catch(() => null);
+    const old = previous?.snapshot;
+    if (old?.mapa && snapshot.mapa && old.mapa !== snapshot.mapa) {
+      throw new MesaError(
+        "BAD_REQUEST",
+        `A última cena salva${old.cena ? ` ("${old.cena}")` : ""} é do mapa "${old.mapa}", mas a cena aberta tem o mapa "${snapshot.mapa}". Salve com um nome (ex.: salvar_cena com nome) para não perder a outra.`,
+      );
+    }
+  }
+  let file: string;
+  try {
+    file = await writeSnapshot(dir, snapshot, args.nome);
+  } catch (err) {
+    throw new MesaError("BAD_REQUEST", `Não consegui salvar a cena: ${errorMessage(err)}`);
+  }
   const parts = [`${tokens.length} token(s)`];
   if (combate) parts.push(`combate na rodada ${combate.rodada}`);
   if (snapshot.nevoa?.cobrindo) parts.push(`névoa cobrindo, ${snapshot.nevoa.reveladas.length} área(s) revelada(s)`);
   if (inventario?.personagens.length) parts.push(`inventário de ${inventario.personagens.length} personagem(ns)`);
-  return `Cena salva em ${file}: mapa "${snapshot.mapa ?? "sem mapa"}", ${parts.join(", ")}.`;
+  const odd = tokens.filter((t) => t.imagem && !isRestorableUrl(t.imagem.url));
+  const lines = [`Cena salva em ${file}: mapa "${snapshot.mapa ?? "sem mapa"}", ${parts.join(", ")}.`];
+  if (odd.length) lines.push(`Estes não poderão ser recriados se sumirem (imagem fora do Owlbear e do catálogo): ${odd.map((t) => `"${t.rotulo || t.nome}"`).join(", ")}.`);
+  if (map && !isRestorableUrl(map.image?.url)) lines.push("O mapa não poderá ser recriado numa cena vazia (imagem fora do Owlbear).");
+  return lines.join("\n");
 }
 
 export interface RestaurarCenaArgs {
+  /** Nome da cena. Sem nome, a última usada (ou a cena.json). */
+  nome?: string;
+  /** true lista as cenas salvas da campanha e não mexe em nada. */
+  listar?: boolean;
   /** true só mostra o que mudaria, sem mexer na mesa. */
   previa?: boolean;
-  /** true usa o salvamento anterior (cena.anterior.json). */
+  /** true usa o salvamento anterior. */
   anterior?: boolean;
   /** true tira da cena os tokens que não estavam no salvamento. */
   remover_sobras?: boolean;
-  /** true restaura mesmo com outro mapa aberto. */
+  /** true restaura mesmo em outra sala ou com outro mapa aberto. */
   forcar?: boolean;
 }
 
-/** Recoloca a mesa como estava no último salvamento da campanha ativa. */
+/** Recoloca a mesa como estava numa cena salva da campanha ativa; numa cena vazia, cria o mapa e os tokens. */
 export async function restaurarCena(ctx: ActionContext, args: RestaurarCenaArgs = {}): Promise<string> {
   const dir = await sceneDir(ctx);
+  if (args.listar) {
+    const { named, current, unnamed } = await listScenes(dir);
+    if (!named.length && !unnamed) return "Nenhuma cena salva nesta campanha.";
+    return [
+      named.length ? `Cenas salvas: ${named.map((n) => (n === current ? `${n} (a atual)` : n)).join(", ")}.` : "Nenhuma cena com nome.",
+      unnamed ? "Há também a cena sem nome (cena.json)." : "",
+    ].filter(Boolean).join("\n");
+  }
+
   let snap: SceneSnapshot | null;
+  let file: string;
   try {
-    snap = await readSnapshot(dir, args.anterior);
+    ({ snapshot: snap, file } = await readSnapshot(dir, { name: args.nome, previous: args.anterior }));
   } catch (err) {
     throw new MesaError("BAD_REQUEST", `Não consegui ler a cena salva: ${errorMessage(err)}`);
   }
-  if (!snap) return `Não há cena salva${args.anterior ? " anterior" : ""} nesta campanha (${dir}).`;
+  if (!snap) {
+    const { named } = await listScenes(dir);
+    return `Não há cena salva em ${file}.${named.length ? ` Cenas com nome: ${named.join(", ")}.` : ""}`;
+  }
 
   const { grid, items, roomId } = await loadScene(ctx);
   requireSquare(grid);
@@ -1301,18 +1511,35 @@ export async function restaurarCena(ctx: ActionContext, args: RestaurarCenaArgs 
     );
   }
   const currentMap = mapName(items);
-  if (snap.mapa && currentMap !== snap.mapa && !args.forcar) {
+  const dry = Boolean(args.previa);
+  const lines: string[] = [];
+  const saved = new Date(snap.salvoEm).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  lines.push(
+    `${dry ? "Prévia da" : "Restaurando a"} cena${snap.cena ? ` "${snap.cena}"` : ""} salva em ${saved}${snap.motivo ? ` (${snap.motivo})` : ""}, mapa "${snap.mapa ?? "sem mapa"}", ${snap.tokens.length} token(s).`,
+  );
+
+  // Mapa: numa cena vazia, recria; com outro mapa aberto, recusa.
+  if (snap.mapa && !currentMap) {
+    const m = snap.mapaImagem;
+    if (!m || !isRestorableUrl(m.imagem.url)) {
+      throw new MesaError("BAD_REQUEST", `A cena aberta está sem mapa e o mapa "${snap.mapa}" não pode ser recriado (salvo sem a imagem ou com imagem fora do Owlbear). Ponha o mapa à mão e restaure de novo.`);
+    }
+    if (!dry) {
+      const model = modelOf(m.imagem, m.escala);
+      await callRestore(ctx, [{
+        url: m.imagem.url, mime: m.imagem.mime, width: m.imagem.largura, height: m.imagem.altura, grid: model.grid!,
+        scale: m.escala, rotation: m.rotacao, layer: "MAP", position: m.posicao, name: m.nome, text: "", visible: m.visivel, locked: m.travado,
+      }]);
+    }
+    lines.push(`${dry ? "Criaria" : "Criei"} o mapa "${snap.mapa}" na cena vazia.`);
+  } else if (snap.mapa && currentMap !== snap.mapa && !args.forcar) {
     throw new MesaError(
       "BAD_REQUEST",
-      `A cena salva é do mapa "${snap.mapa}", mas a cena aberta tem ${currentMap ? `o mapa "${currentMap}"` : "nenhum mapa"}. Abra a cena certa no Owlbear ou use forcar: true.`,
+      `A cena salva é do mapa "${snap.mapa}", mas a cena aberta tem o mapa "${currentMap}". Abra a cena certa (ou uma cena vazia, para eu montar tudo) ou use forcar: true.`,
     );
   }
 
-  const dry = Boolean(args.previa);
-  const saved = new Date(snap.salvoEm).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
-  const lines = [
-    `${dry ? "Prévia da" : "Restaurando a"} cena salva em ${saved}${snap.motivo ? ` (${snap.motivo})` : ""}, mapa "${snap.mapa ?? "sem mapa"}", ${snap.tokens.length} token(s).`,
-  ];
+  const sameGrid = snap.grade?.dpi === grid.dpi;
   const { pairs, missing, extra } = matchTokens(snap.tokens, sceneTokens(items));
 
   // Tokens que já estão na cena: posição, visibilidade e rótulo.
@@ -1340,42 +1567,22 @@ export async function restaurarCena(ctx: ActionContext, args: RestaurarCenaArgs 
     }
   }
   if (!dry && updates.length) await ctx.table.call("updateItems", { updates }, requestOptions(ctx));
-  lines.push(
-    changed.length
-      ? `${dry ? "Mudaria" : "Ajustei"} ${changed.length} token(s): ${changed.join("; ")}.`
-      : "Os tokens que estão na cena já estão no lugar salvo.",
-  );
+  if (changed.length) lines.push(`${dry ? "Mudaria" : "Ajustei"} ${changed.length} token(s): ${changed.join("; ")}.`);
+  else if (pairs.length) lines.push("Os tokens que estão na cena já estão no lugar salvo.");
 
-  // Tokens que sumiram: só os do catálogo podem ser recriados.
+  // Tokens que sumiram: recria com a imagem, o tamanho e a escala originais.
   const recreatable = missing.filter(canRecreate);
   const lost = missing.filter((s) => !canRecreate(s));
   if (recreatable.length) {
     if (!dry) {
-      for (const s of recreatable) {
-        const size = s.imagem!.largura;
-        const model: RawItem = {
-          id: "restaurar", type: "IMAGE", name: s.nome, layer: "CHARACTER", position: { x: 0, y: 0 }, rotation: 0,
-          scale: { x: 1, y: 1 }, visible: true, locked: false,
-          image: { width: size, height: size, url: "" }, grid: { dpi: size, offset: { x: size / 2, y: size / 2 } },
-        };
-        await ctx.table.call(
-          "addImages",
-          {
-            url: s.imagem!.url,
-            size,
-            layer: s.camada === "PROP" ? "PROP" : "CHARACTER",
-            tokens: [{ position: positionForCell(model, grid, s.coluna, s.linha), text: s.rotulo, name: s.nome, visible: s.visivel }],
-          },
-          requestOptions(ctx),
-        );
+      for (let i = 0; i < recreatable.length; i += 50) {
+        await callRestore(ctx, recreatable.slice(i, i + 50).map((s) => restoreSpec(s, grid, sameGrid)));
       }
     }
-    lines.push(`${dry ? "Recriaria" : "Recriei"} ${recreatable.length} token(s) do catálogo: ${recreatable.map((s) => `"${s.rotulo || s.nome}" em (${s.coluna}, ${s.linha})`).join(", ")}.`);
-    const bigger = recreatable.filter((s) => s.largura > 1 || s.altura > 1);
-    if (bigger.length) lines.push(`Atenção: ${bigger.map((s) => `"${s.rotulo || s.nome}"`).join(", ")} ${dry ? "voltaria" : "voltou"} com 1 casa; aumente no Owlbear.`);
+    lines.push(`${dry ? "Recriaria" : "Recriei"} ${recreatable.length} token(s): ${recreatable.map((s) => `"${s.rotulo || s.nome}" em (${s.coluna}, ${s.linha})`).join(", ")}.`);
   }
   if (lost.length) {
-    lines.push(`Não dá para recriar (imagem enviada direto no Owlbear): ${lost.map((s) => `"${s.rotulo || s.nome}" em (${s.coluna}, ${s.linha})`).join(", ")}. Ponha de volta à mão, se quiser.`);
+    lines.push(`Não dá para recriar (imagem fora do Owlbear e do catálogo): ${lost.map((s) => `"${s.rotulo || s.nome}" em (${s.coluna}, ${s.linha})`).join(", ")}. Ponha de volta à mão, se quiser.`);
   }
 
   // Tokens que não estavam no salvamento.
@@ -1407,12 +1614,18 @@ export async function restaurarCena(ctx: ActionContext, args: RestaurarCenaArgs 
   if (snap.nevoa) {
     const fog = await ctx.table.call("fogState", undefined, requestOptions(ctx)).catch(() => null);
     if (fog) {
-      if (fog.filled !== snap.nevoa.cobrindo) {
-        if (!dry) await ctx.table.call("fogSetFilled", { filled: snap.nevoa.cobrindo }, requestOptions(ctx));
-        lines.push(snap.nevoa.cobrindo ? `Névoa ${dry ? "voltaria" : "voltou"} a cobrir o mapa.` : `Cobertura de névoa ${dry ? "seria desligada" : "desligada"}, como estava.`);
-      }
       const revealed = new Set(snap.nevoa.reveladas.map(normalize));
       const ours = fog.areas.filter((a) => a.ours);
+      // Cobrir sem as áreas reveladas deixaria o mapa todo preto para os jogadores.
+      const areasGone = snap.nevoa.reveladas.length > 0 && !ours.some((a) => revealed.has(normalize(a.name)));
+      if (fog.filled !== snap.nevoa.cobrindo) {
+        if (snap.nevoa.cobrindo && areasGone) {
+          lines.push("Névoa: não cobri o mapa, porque as áreas que estavam reveladas não existem nesta cena; cubra e revele de novo com nevoa.");
+        } else {
+          if (!dry) await ctx.table.call("fogSetFilled", { filled: snap.nevoa.cobrindo }, requestOptions(ctx));
+          lines.push(snap.nevoa.cobrindo ? `Névoa ${dry ? "voltaria" : "voltou"} a cobrir o mapa.` : `Cobertura de névoa ${dry ? "seria desligada" : "desligada"}, como estava.`);
+        }
+      }
       const toCut = ours.filter((a) => a.visible && revealed.has(normalize(a.name))).map((a) => a.id);
       const toCover = ours.filter((a) => !a.visible && !revealed.has(normalize(a.name))).map((a) => a.id);
       if (!dry && toCut.length) await ctx.table.call("fogSetCut", { ids: toCut, cut: true }, requestOptions(ctx));
@@ -1420,7 +1633,7 @@ export async function restaurarCena(ctx: ActionContext, args: RestaurarCenaArgs 
       if (toCut.length || toCover.length) lines.push(`Névoa: ${toCut.length} área(s) revelada(s) e ${toCover.length} coberta(s) de novo.`);
       const known = new Set(ours.map((a) => normalize(a.name)));
       const gone = snap.nevoa.reveladas.filter((name) => !known.has(normalize(name)));
-      if (gone.length) lines.push(`Áreas reveladas que não existem mais na cena: ${gone.join(", ")} (revele de novo com nevoa).`);
+      if (gone.length) lines.push(`Áreas reveladas que não existem mais nesta cena: ${gone.join(", ")} (revele de novo com nevoa).`);
     }
   }
 
@@ -1448,3 +1661,146 @@ export async function restaurarCena(ctx: ActionContext, args: RestaurarCenaArgs 
   if (dry) lines.push("Nada foi mexido. Chame restaurar_cena sem `previa` para aplicar.");
   return lines.join("\n");
 }
+
+// --------------------------------------------------------------------- fichas
+
+export interface FichaArgs {
+  /**
+   * ver: mostra (sem nome, o resumo de todas); sincronizar: junta disco e sala, vale a mais nova;
+   * preparar: troca as magias preparadas; gastar: gasta espaço de magia; descanso: curto ou longo.
+   */
+  acao: "ver" | "sincronizar" | "preparar" | "gastar" | "descanso";
+  /** Nome do personagem (ou o id do arquivo). */
+  nome?: string;
+  /** preparar: ids ou nomes (em inglês) das magias, a lista inteira. */
+  magias?: string[];
+  /** gastar: nível do espaço (1 a 9). */
+  nivel?: number;
+  qtd?: number;
+  /** descanso: "longo" recupera PV e todos os espaços; "curto" só a Magia de Pacto. */
+  tipo?: "curto" | "longo";
+}
+
+/** Limite dos dados da sala do Owlbear é 16 KB para tudo; as fichas ficam bem abaixo disso. */
+const MAX_SHEETS_BYTES = 10_000;
+
+async function loadAllSheets(ctx: ActionContext): Promise<{ fichas: Ficha[]; notes: string[]; dir: string; roomOk: boolean }> {
+  const dir = await sceneDir(ctx);
+  const { fichas: disk, erros } = await readSheets(dir);
+  const notes = erros.map((e) => `Ficha com erro: ${e}`);
+  let room: Ficha[] = [];
+  let roomOk = true;
+  try {
+    room = (await ctx.table.call("getSheets", undefined, requestOptions(ctx))).personagens
+      .map(parseSheet)
+      .filter((f): f is Ficha => f !== null);
+  } catch (err) {
+    roomOk = false;
+    notes.push(
+      /Método desconhecido/.test(errorMessage(err))
+        ? "A extensão do Owlbear é antiga e não guarda fichas: rode `npm run build` e recarregue a sala. Usei só as fichas do disco."
+        : `Sem a mesa (${errorMessage(err)}): usei só as fichas do disco.`,
+    );
+  }
+  const { fichas, paraDisco, paraSala } = mergeSheets(disk, room);
+  for (const f of paraDisco) await writeSheet(dir, f);
+  if (paraDisco.length) notes.push(`Atualizei no disco o que mudou no painel: ${paraDisco.map((f) => f.nome).join(", ")}.`);
+  if (roomOk && paraSala) await pushSheets(ctx, fichas);
+  return { fichas, notes, dir, roomOk };
+}
+
+async function pushSheets(ctx: ActionContext, fichas: Ficha[]): Promise<void> {
+  const size = new TextEncoder().encode(JSON.stringify(fichas)).length;
+  if (size > MAX_SHEETS_BYTES) {
+    throw new MesaError("BAD_REQUEST", `As fichas somam ${Math.round(size / 1000)} KB, mais do que cabe nos dados da sala do Owlbear (${MAX_SHEETS_BYTES / 1000} KB para fichas). Encurte as características ou as notas.`);
+  }
+  await ctx.table.call("setSheets", { sheets: { personagens: fichas } }, requestOptions(ctx));
+}
+
+function findSheet(fichas: Ficha[], query: string | undefined): Ficha {
+  const key = normalize(query ?? "");
+  if (!key) throw new MesaError("BAD_REQUEST", "Diga de qual personagem.");
+  const found =
+    fichas.find((f) => f.id === key || normalize(f.nome) === key) ??
+    fichas.filter((f) => normalize(f.nome).includes(key) || normalize(f.token ?? "") === key || normalize(f.jogador ?? "") === key)[0];
+  if (!found) throw new MesaError("TOKEN_NOT_FOUND", `Não há ficha de "${query}". Fichas: ${fichas.map((f) => f.nome).join(", ") || "nenhuma"}.`);
+  return found;
+}
+
+/** Grava a ficha mudada no disco e na sala, com novo carimbo de tempo. */
+async function saveSheet(ctx: ActionContext, dir: string, fichas: Ficha[], changed: Ficha): Promise<void> {
+  changed.atualizadoEm = (ctx.now?.() ?? new Date()).toISOString();
+  await writeSheet(dir, changed);
+  const all = fichas.map((f) => (f.id === changed.id ? changed : f));
+  await pushSheets(ctx, all).catch(() => {});
+}
+
+export async function ficha(ctx: ActionContext, args: FichaArgs): Promise<string> {
+  if (!ctx.dataDir) throw new MesaError("INTERNAL", "Pasta de dados de magia não configurada.");
+  const { spells, tables } = await loadRulesData(ctx.dataDir);
+  const { fichas, notes, dir, roomOk } = await loadAllSheets(ctx);
+  const tail = () => (notes.length ? `\n${notes.join("\n")}` : "");
+
+  switch (args.acao) {
+    case "ver":
+    case "sincronizar": {
+      if (fichas.length === 0) return `Nenhuma ficha em JSON em ${path.join(dir, "fichas")}.${tail()}`;
+      if (args.nome) return describeSheet(findSheet(fichas, args.nome), spells, tables) + tail();
+      const head =
+        args.acao === "sincronizar" ? `${roomOk ? "Fichas sincronizadas (disco e sala)" : "Fichas só do disco (a sala não respondeu)"}: ${fichas.length}.\n` : "";
+      return head + fichas.map((f) => describeSheet(f, spells, tables, false)).join("\n\n") + tail();
+    }
+    case "preparar": {
+      const f = findSheet(fichas, args.nome);
+      const limits = spellLimits(tables, f.classe, f.nivel);
+      if (!f.magia || !limits) throw new MesaError("BAD_REQUEST", `${f.nome} não conjura magias.`);
+      const allowed = new Set(preparableSpells(spells, tables, f.classe, f.nivel).map((s) => s.id));
+      const chosen: string[] = [];
+      const errors: string[] = [];
+      for (const q of args.magias ?? []) {
+        const s = findSpell(spells, q);
+        if (!s) errors.push(`"${q}" não está no SRD.`);
+        else if (!allowed.has(s.id)) errors.push(`${s.nome} (${s.nivel}º nível) não está disponível para ${tables.classes[f.classe]?.nome} ${f.nivel}.`);
+        else if (f.classe === "mago" && f.magia.grimorio && !f.magia.grimorio.includes(s.id)) errors.push(`${s.nome} não está no grimório.`);
+        else if (!chosen.includes(s.id)) chosen.push(s.id);
+      }
+      const free = chosen.filter((id) => !limits.sempre.includes(id) && !f.magia!.sempre.includes(id));
+      if (free.length > limits.preparadas) errors.push(`São ${free.length} magias; o limite é ${limits.preparadas}.`);
+      if (errors.length) throw new MesaError("BAD_REQUEST", `Nada mudou. ${errors.join(" ")}`);
+      f.magia.preparadas = free;
+      f.pendencias = f.pendencias?.filter((p) => !/magias? preparad|escolher .*magias?/i.test(p));
+      await saveSheet(ctx, dir, fichas, f);
+      return `Magias preparadas de ${f.nome} trocadas.\n${describeSheet(f, spells, tables, false)}${tail()}`;
+    }
+    case "gastar": {
+      const f = findSheet(fichas, args.nome);
+      const limits = spellLimits(tables, f.classe, f.nivel);
+      if (!f.magia || !limits) throw new MesaError("BAD_REQUEST", `${f.nome} não tem espaços de magia.`);
+      const level = Math.trunc(args.nivel ?? 1);
+      const qty = Math.max(1, Math.trunc(args.qtd ?? 1));
+      const total = limits.espacos[level - 1] ?? 0;
+      const used = f.magia.gastos[level - 1] ?? 0;
+      if (used + qty > total) throw new MesaError("BAD_REQUEST", `${f.nome} só tem ${total - used} espaço(s) de ${level}º nível livre(s).`);
+      while (f.magia.gastos.length < level) f.magia.gastos.push(0);
+      f.magia.gastos[level - 1] = used + qty;
+      await saveSheet(ctx, dir, fichas, f);
+      return `${f.nome} gastou ${qty} espaço(s) de ${level}º nível: sobram ${total - used - qty}/${total}.${tail()}`;
+    }
+    case "descanso": {
+      const longo = (args.tipo ?? "longo") === "longo";
+      const targets = args.nome ? [findSheet(fichas, args.nome)] : fichas;
+      for (const f of targets) {
+        if (longo) {
+          f.pv.atual = f.pv.max;
+          f.pv.temp = 0;
+          if (f.magia) f.magia.gastos = [];
+        } else if (f.magia && tables.classes[f.classe]?.progressao === "pacto") {
+          f.magia.gastos = [];
+        }
+        await saveSheet(ctx, dir, fichas, f);
+      }
+      return `${longo ? "Descanso longo" : "Descanso curto"}: ${targets.map((f) => f.nome).join(", ")}. ${longo ? "PV cheios e espaços de magia recuperados. Os usos de características (Mãos Consagradas, Golpe do Paladino grátis etc.) também voltam: lembre os jogadores." : "Magia de Pacto recuperada (bruxo). Dados de Vida para curar: os jogadores rolam."}${tail()}`;
+    }
+  }
+}
+

@@ -15,6 +15,7 @@
       <p id="hint" class="hint" hidden></p>
       <nav class="tabs" role="tablist">
         <button type="button" role="tab" data-tab="mesa" aria-selected="true">Mesa</button>
+        <button type="button" role="tab" data-tab="fichas" aria-selected="false">Fichas</button>
         <button type="button" role="tab" data-tab="inventario" aria-selected="false">Inventário</button>
         <button type="button" role="tab" data-tab="opcoes" aria-selected="false">Opções</button>
       </nav>
@@ -33,6 +34,10 @@
           <input id="say-text" type="text" maxlength="500" placeholder="O que você faz?" aria-label="Sua ação" disabled />
           <button id="say-send" type="submit" disabled>Enviar</button>
         </form>
+      </div>
+
+      <div id="tab-fichas" class="tab" role="tabpanel" hidden>
+        <div id="sheets" class="sheets"></div>
       </div>
 
       <div id="tab-inventario" class="tab" role="tabpanel" hidden>

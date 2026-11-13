@@ -59,7 +59,7 @@ describe("inventário", () => {
     const ctx = { table: memoryLink(table) };
     assert.match(await inventario(ctx, { acao: "ver" }), /Inventário vazio/);
     await assert.rejects(inventario(ctx, { acao: "dar", personagem: "Guilherme", item: "Corda" }), MesaError);
-    assert.match(await inventario(ctx, { acao: "criar", personagem: "Guilherme", jogador: "GM" }), /adicionado/);
+    assert.match(await inventario(ctx, { acao: "criar", personagem: "Guilherme", jogador: "GM" }), /Guilherme criado no inventário\./);
     await inventario(ctx, { acao: "dar", personagem: "guilherme", item: "Corda 15 m" });
     await inventario(ctx, { acao: "dar", personagem: "guilherme", item: "corda 15 m", qtd: 2 });
     assert.match(await inventario(ctx, { acao: "dar", personagem: "Guilherme", item: "Espada longa", nota: "+1" }), /3× Corda 15 m; Espada longa \(\+1\)/);
@@ -68,6 +68,20 @@ describe("inventário", () => {
     await assert.rejects(inventario(ctx, { acao: "moedas", personagem: "Guilherme", po: -60 }), MesaError);
     assert.match(await inventario(ctx, { acao: "ver" }), /^Guilherme \[GM\]: 50 po/);
     assert.equal(table.inventory.personagens[0]!.itens.length, 1);
+  });
+
+  it("monta o personagem pela ficha numa chamada e pode repetir sem duplicar", async () => {
+    const { inventario } = await import("./actions.js");
+    const table = new FakeTable();
+    const ctx = { table: memoryLink(table) };
+    const ficha = { acao: "criar" as const, personagem: "Marcos", jogador: "Marcos", po: 10, itens: [{ nome: "Arco longo" }, { nome: "Flechas", qtd: 20 }, { nome: "Adaga", qtd: 2 }] };
+    assert.match(await inventario(ctx, ficha), /Marcos criado no inventário; entraram 3 item\(ns\)\.\nMarcos \[Marcos\]: 10 po, 0 pp, 0 pc\. Itens: Arco longo; 20× Flechas; 2× Adaga\./);
+    // Gastou flechas e ganhou ouro no jogo; montar de novo pela ficha não mexe nisso.
+    await inventario(ctx, { acao: "tirar", personagem: "Marcos", item: "Flechas", qtd: 5 });
+    await inventario(ctx, { acao: "moedas", personagem: "Marcos", po: 5 });
+    assert.match(await inventario(ctx, { ...ficha, itens: [...ficha.itens, { nome: "Capa de ranger" }] }), /já estava no inventário; entraram 1 item\(ns\)\.\nMarcos \[Marcos\]: 15 po.*15× Flechas.*Capa de ranger/);
+    // Saque inteiro de uma vez.
+    assert.match(await inventario(ctx, { acao: "dar", personagem: "Marcos", itens: [{ nome: "Flechas", qtd: 3 }, { nome: "Orelha de goblin", qtd: 4 }] }), /18× Flechas.*4× Orelha de goblin/);
   });
 });
 

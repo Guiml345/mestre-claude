@@ -30,10 +30,13 @@ import {
   type ActionContext,
 } from "./actions.js";
 import { Bridge } from "./bridge.js";
-import { VERSION, loadConfig } from "./config.js";
+import { PROJECT_ROOT, VERSION, loadConfig } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { createRollLogger } from "./rolllog.js";
 import { activeCampaignDir } from "./campaigns.js";
+import { loadRoles } from "./catalog.js";
+import { contactSheet } from "./folha.js";
+import path from "node:path";
 
 const USAGE = `Mestre Claude ${VERSION} - comandos de teste
 
@@ -50,9 +53,10 @@ const USAGE = `Mestre Claude ${VERSION} - comandos de teste
   npm run mesa -- escutar [minutos]              espera até alguém digitar (padrão 120 min) e sai
   npm run mesa -- criar <modelo> [qtd] [rótulo]  cria cópias de um token perto dele
   npm run mesa -- remover <token>                tira um token da cena
-  npm run mesa -- salvar [motivo]                grava a cena em campanhas/<ativa>/cena.json
-  npm run mesa -- restaurar [previa] [anterior] [sobras] [forcar]  volta a cena salva
-  npm run mesa -- mapa <arquivo.jpg> [token raio] salva o mapa com a grade numerada`;
+  npm run mesa -- salvar [nome=<cena>] [motivo]  grava a cena na campanha ativa
+  npm run mesa -- restaurar [nome=<cena>] [listar|previa|anterior|sobras|forcar]  volta uma cena salva
+  npm run mesa -- mapa <arquivo.jpg> [token raio] salva o mapa com a grade numerada
+  npm run mesa -- folha <saida.png> papeis|<autor/nome>...  monta uma folha para conferir ícones`;
 
 function integer(text: string | undefined, name: string): number {
   const value = Number.parseInt(text ?? "", 10);
@@ -73,6 +77,27 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
+
+  if (command === "folha") {
+    // npm run mesa -- folha <saida.png> papeis | <autor/nome> [<autor/nome>...]
+    // Não precisa da mesa: só monta a imagem para conferir os ícones.
+    const out = required(rest[0], "arquivo de saída .png");
+    const tokensDir = path.join(PROJECT_ROOT, "extension", "public", "tokens");
+    let icons = rest.slice(1);
+    let labels: string[] | undefined;
+    if (icons[0] === "papeis") {
+      const roles = await loadRoles(config.rolesFile);
+      icons = roles.map((r) => r.icone);
+      labels = roles.map((r) => r.nome);
+    }
+    if (icons.length === 0) throw new Error("Diga os ícones (autor/nome) ou `papeis`.");
+    const { image, missing } = await contactSheet(tokensDir, icons, labels);
+    await writeFile(out, image);
+    console.log(`Folha com ${icons.length - missing.length} ícone(s) salva em ${out}.`);
+    if (missing.length) console.log(`Sem imagem (rode npm run build:tokens ou confira o nome): ${missing.join(", ")}`);
+    return;
+  }
+
   const bridge = new Bridge({
     port: config.port,
     staticDir: config.staticDir,
@@ -82,7 +107,7 @@ async function main(): Promise<void> {
   });
   // A extensão tenta reconectar a cada poucos segundos, então a linha de comando espera um pouco por ela.
   const campaignDir = async () => config.campaignDir ?? activeCampaignDir(config.campaignsRoot);
-  const ctx: ActionContext = { table: bridge, logRoll: createRollLogger(campaignDir), campaignsRoot: config.campaignsRoot, campaignDir, iconsDir: config.iconsDir, waitTableMs: 10_000 };
+  const ctx: ActionContext = { table: bridge, logRoll: createRollLogger(campaignDir), campaignsRoot: config.campaignsRoot, campaignDir, iconsDir: config.iconsDir, rolesFile: config.rolesFile, dataDir: config.dataDir, waitTableMs: 10_000 };
 
   try {
     await bridge.ensure();
@@ -238,12 +263,16 @@ async function main(): Promise<void> {
       case "remover":
         console.log(await removerToken(ctx, { token: required(rest[0], "token") }));
         return;
-      case "salvar":
-        console.log(await salvarCena(ctx, { motivo: rest.join(" ") || undefined }));
+      case "salvar": {
+        // npm run mesa -- salvar [nome=<cena>] [motivo...]
+        const nome = rest.find((a) => a.startsWith("nome="))?.slice(5);
+        const motivo = rest.filter((a) => !a.startsWith("nome=")).join(" ");
+        console.log(await salvarCena(ctx, { nome, motivo: motivo || undefined }));
         return;
+      }
       case "restaurar":
-        // npm run mesa -- restaurar [previa] [anterior] [sobras] [forcar]
-        console.log(await restaurarCena(ctx, { previa: rest.includes("previa"), anterior: rest.includes("anterior"), remover_sobras: rest.includes("sobras"), forcar: rest.includes("forcar") }));
+        // npm run mesa -- restaurar [nome=<cena>] [listar] [previa] [anterior] [sobras] [forcar]
+        console.log(await restaurarCena(ctx, { nome: rest.find((a) => a.startsWith("nome="))?.slice(5), listar: rest.includes("listar"), previa: rest.includes("previa"), anterior: rest.includes("anterior"), remover_sobras: rest.includes("sobras"), forcar: rest.includes("forcar") }));
         return;
       case "aguardar":
         console.log(await aguardarJogadores(ctx, { segundos: rest[0] ? integer(rest[0], "segundos") : 50 }));

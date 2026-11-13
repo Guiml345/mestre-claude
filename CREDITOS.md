@@ -40,3 +40,11 @@ Os tokens do catálogo são feitos a partir dos ícones do [game-icons.net](http
 - Icons made by **Caro Asercion**
 
 O texto original da licença do pacote está em `icons/license.txt` e é publicado junto com os tokens, em `tokens/CREDITOS.txt`.
+
+## Regras e magias (SRD 5.2.1)
+
+As magias (`extension/public/dados/magias.json`) e as tabelas de magia por classe (`extension/public/dados/classes.json`) vêm do System Reference Document 5.2.1:
+
+This work includes material from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of the Coast LLC, available at https://www.dndbeyond.com/srd. The SRD 5.2.1 is licensed under the Creative Commons Attribution 4.0 International License, available at https://creativecommons.org/licenses/by/4.0/legalcode.
+
+O texto foi extraído do PDF e reorganizado em JSON (campos em português, descrições no original em inglês); as escolas de magia foram traduzidas.

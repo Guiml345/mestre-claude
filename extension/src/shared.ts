@@ -1,4 +1,5 @@
-import type { AnnounceVariant, Announcement, Combat, Inventory, TableConfig } from "../../server/src/protocol";
+import type { AnnounceVariant, Announcement, Combat, Ficha, Fichas, Inventory, TableConfig } from "../../server/src/protocol";
+import { parseSheet } from "../../server/src/regras";
 
 export const EXT_ID = "mestre-claude";
 export const VERSION = "0.1.0";
@@ -222,6 +223,16 @@ export function parseCombat(data: unknown): Combat | null {
     vez: Math.min(Math.max(Number(raw.vez) || 0, 0), Math.max(combatentes.length - 1, 0)),
     combatentes,
   };
+}
+
+/** Fichas dos personagens, nos dados da sala. */
+export const SHEETS_KEY = `${EXT_ID}/fichas`;
+
+/** Valida as fichas guardadas na sala; qualquer um na sala pode escrever ali. */
+export function parseSheets(data: unknown): Fichas {
+  const raw = (data && typeof data === "object" ? data : {}) as { personagens?: unknown };
+  const list = Array.isArray(raw.personagens) ? raw.personagens : [];
+  return { personagens: list.slice(0, 12).map(parseSheet).filter((f): f is Ficha => f !== null) };
 }
 
 /** Inventário de todos os personagens, nos dados da sala. */

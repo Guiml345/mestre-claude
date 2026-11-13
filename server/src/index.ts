@@ -22,7 +22,7 @@ const bridge = new Bridge({
 
 const server = new McpServer({ name: "mesa", version: VERSION }, { instructions: INSTRUCTIONS });
 const campaignDir = async () => config.campaignDir ?? activeCampaignDir(config.campaignsRoot);
-registerTools(server, { table: bridge, logRoll: createRollLogger(campaignDir), campaignsRoot: config.campaignsRoot, campaignDir, iconsDir: config.iconsDir });
+registerTools(server, { table: bridge, logRoll: createRollLogger(campaignDir), campaignsRoot: config.campaignsRoot, campaignDir, iconsDir: config.iconsDir, rolesFile: config.rolesFile, dataDir: config.dataDir });
 
 let shuttingDown = false;
 async function shutdown(): Promise<void> {

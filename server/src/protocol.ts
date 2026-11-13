@@ -24,7 +24,7 @@ export interface RawItem {
   attachedTo?: string;
   /** Rótulo escrito embaixo do token. Só existe em imagens. */
   text?: string;
-  image?: { width: number; height: number; url: string };
+  image?: { width: number; height: number; url: string; mime?: string };
   /** Grade da própria imagem: quantos pixels dela valem uma casa e onde fica a âncora. */
   grid?: { dpi: number; offset: Vec2 };
 }
@@ -97,11 +97,15 @@ export interface TableMethods {
   cloneItems: { params: { sourceId: string; copies: CloneCopy[] }; result: { ids: string[] } };
   /** Cria tokens a partir de uma imagem publicada (catálogo de tokens). */
   addImages: { params: { url: string; size: number; layer?: "CHARACTER" | "PROP"; tokens: Array<{ position: Vec2; text: string; name: string; visible?: boolean }> }; result: { ids: string[] } };
+  /** Recria mapa e tokens de uma cena salva (imagens do catálogo ou do próprio Owlbear). */
+  restoreImages: { params: { images: RestoreImage[] }; result: { ids: string[] } };
   deleteItems: { params: { ids: string[] }; result: { deleted: number } };
   getCombat: { params: undefined; result: Combat | null };
   setCombat: { params: { combat: Combat | null }; result: { saved: true } };
   getConfig: { params: undefined; result: TableConfig };
   setConfig: { params: Partial<TableConfig>; result: TableConfig };
+  getSheets: { params: undefined; result: Fichas };
+  setSheets: { params: { sheets: Fichas }; result: { saved: true } };
   getInventory: { params: undefined; result: Inventory };
   setInventory: { params: { inventory: Inventory }; result: { saved: true } };
   /** Leva a câmera de quem deixou "Câmera segue a ação" ligada até a área (em pixels da cena). */
@@ -138,6 +142,22 @@ export interface Combat {
   /** Índice de quem está na vez em `combatentes`. */
   vez: number;
   combatentes: Combatant[];
+}
+
+export interface RestoreImage {
+  url: string;
+  mime?: string;
+  width: number;
+  height: number;
+  grid: { dpi: number; offset: Vec2 };
+  scale: Vec2;
+  rotation: number;
+  layer: "MAP" | "CHARACTER" | "MOUNT" | "PROP";
+  position: Vec2;
+  name: string;
+  text: string;
+  visible: boolean;
+  locked: boolean;
 }
 
 export interface CloneCopy {
@@ -219,6 +239,71 @@ export interface InventoryCharacter {
   jogador?: string;
   moedas: Coins;
   itens: InventoryItem[];
+}
+
+export type Atributo = "for" | "des" | "con" | "int" | "sab" | "car";
+
+/**
+ * Ficha de personagem (D&D 2024). Fica em campanhas/<nome>/fichas/<id>.json e nos dados
+ * da sala (o painel mostra e os jogadores editam). Vale a versão com `atualizadoEm` mais novo.
+ * Magias são ids de extension/public/dados/magias.json; espaços e limites saem de classes.json.
+ */
+export interface Ficha {
+  /** Nome do arquivo e chave: "guilherme", "leo-batata". */
+  id: string;
+  nome: string;
+  /** Nome no Owlbear de quem controla (só essa pessoa e o mestre editam pelo painel). */
+  jogador?: string;
+  /** Rótulo do token na mesa. */
+  token?: string;
+  especie: string;
+  /** Id da classe em classes.json (ex.: "paladino"). */
+  classe: string;
+  subclasse?: string;
+  nivel: number;
+  antecedente?: string;
+  xp?: number;
+  atributos: Record<Atributo, number>;
+  pv: { max: number; atual: number; temp: number };
+  ca: number;
+  caNota?: string;
+  iniciativa: number;
+  deslocamento: string;
+  proficiencia: number;
+  /** Atributos em que tem proficiência na salvaguarda. */
+  salvaguardas: Atributo[];
+  pericias: Array<{ nome: string; bonus: number }>;
+  sentidos?: string;
+  idiomas?: string;
+  ataques: Array<{ nome: string; bonus: number; dano: string; nota?: string }>;
+  caracteristicas: Array<{ nome: string; texto: string }>;
+  magia?: {
+    atributo: Atributo;
+    cd: number;
+    ataque: number;
+    truques: string[];
+    /** Magias de nível 1+ preparadas (contam no limite da classe). */
+    preparadas: string[];
+    /** Sempre preparadas por característica (não contam no limite). */
+    sempre: string[];
+    /** Só mago: magias no grimório. */
+    grimorio?: string[];
+    /** Magias extras (talento, espécie), com de onde vêm. Não contam no limite. */
+    extras?: Array<{ id: string; fonte: string }>;
+    /** Espaços gastos por nível de magia (posição 0 = 1º nível). */
+    gastos: number[];
+  };
+  /** Equipamento da ficha; é o que monta o inventário do painel. */
+  equipamento: Array<{ nome: string; qtd?: number; nota?: string }>;
+  moedas?: { po: number; pp: number; pc: number };
+  notas?: string;
+  /** O que falta o jogador decidir (ex.: "escolher 3 magias"). */
+  pendencias?: string[];
+  atualizadoEm: string;
+}
+
+export interface Fichas {
+  personagens: Ficha[];
 }
 
 /** Inventário de todos, nos dados da sala do Owlbear. Os jogadores editam pelo painel, sem passar pelo Claude. */

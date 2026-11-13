@@ -36,24 +36,42 @@ export function requireSquare(grid: GridInfo): void {
  * A posição de uma imagem no Owlbear é a âncora (`grid.offset`), que pode ser o
  * centro (tokens) ou o canto (mapas), então a conta parte das bordas reais.
  */
+/**
+ * Retângulo que a imagem ocupa na cena, em pixels, já com escala e rotação.
+ * O Owlbear gira a imagem em sentido horário em volta da posição (a âncora).
+ */
+export function bounds(item: RawItem, grid: GridInfo): { x0: number; y0: number; x1: number; y1: number } {
+  if (!item.image || !item.grid || item.grid.dpi <= 0) {
+    const half = grid.dpi / 2;
+    return { x0: item.position.x - half, y0: item.position.y - half, x1: item.position.x + half, y1: item.position.y + half };
+  }
+  const k = grid.dpi / item.grid.dpi;
+  // Cantos da imagem em relação à âncora, já na escala da cena.
+  const left = -item.grid.offset.x * k * item.scale.x;
+  const right = (item.image.width - item.grid.offset.x) * k * item.scale.x;
+  const top = -item.grid.offset.y * k * item.scale.y;
+  const bottom = (item.image.height - item.grid.offset.y) * k * item.scale.y;
+  const rad = ((item.rotation || 0) * Math.PI) / 180;
+  // Rotações de 90 em 90 dão números exatos (sem 1e-13 de seno e cosseno).
+  const exact = (v: number) => (Math.abs(v) < 1e-9 ? 0 : Math.abs(Math.abs(v) - 1) < 1e-9 ? Math.sign(v) : v);
+  const cos = exact(Math.cos(rad));
+  const sin = exact(Math.sin(rad));
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const [x, y] of [[left, top], [right, top], [left, bottom], [right, bottom]] as const) {
+    xs.push(item.position.x + x * cos - y * sin);
+    ys.push(item.position.y + x * sin + y * cos);
+  }
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+}
+
 export function footprint(item: RawItem, grid: GridInfo): Footprint {
   const dpi = grid.dpi;
-  let centerX = item.position.x;
-  let centerY = item.position.y;
-  let widthPx = dpi;
-  let heightPx = dpi;
-
-  if (item.image && item.grid && item.grid.dpi > 0) {
-    const k = dpi / item.grid.dpi;
-    const x0 = item.position.x - item.grid.offset.x * k * item.scale.x;
-    const x1 = item.position.x + (item.image.width - item.grid.offset.x) * k * item.scale.x;
-    const y0 = item.position.y - item.grid.offset.y * k * item.scale.y;
-    const y1 = item.position.y + (item.image.height - item.grid.offset.y) * k * item.scale.y;
-    centerX = (x0 + x1) / 2;
-    centerY = (y0 + y1) / 2;
-    widthPx = Math.abs(x1 - x0);
-    heightPx = Math.abs(y1 - y0);
-  }
+  const b = bounds(item, grid);
+  const centerX = (b.x0 + b.x1) / 2;
+  const centerY = (b.y0 + b.y1) / 2;
+  const widthPx = b.x1 - b.x0;
+  const heightPx = b.y1 - b.y0;
 
   const w = Math.max(1, Math.round(widthPx / dpi));
   const h = Math.max(1, Math.round(heightPx / dpi));

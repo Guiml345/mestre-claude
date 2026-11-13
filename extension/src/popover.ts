@@ -31,6 +31,7 @@ import {
   type BridgeStatus,
   type Say,
 } from "./shared";
+import { initSheets } from "./fichas";
 import "./style.css";
 
 function element<T extends HTMLElement>(id: string): T {
@@ -171,6 +172,8 @@ function applyTheme(theme: Theme): void {
   root.style.setProperty("--text", theme.text.primary);
   root.style.setProperty("--muted", theme.text.secondary);
   root.style.setProperty("--accent", theme.primary.main);
+  // Fundo do painel do Owlbear: usado no que fica fixo por cima do conteúdo que rola.
+  root.style.setProperty("--panel-bg", theme.background.paper);
 }
 
 if (!OBR.isAvailable) {
@@ -601,6 +604,8 @@ function renderCharacter(c: InventoryCharacter): HTMLElement {
   }
   return card;
 }
+
+initSheets(element<HTMLDivElement>("sheets"), { isGm: () => isGm, myName: () => myName });
 
 if (OBR.isAvailable) {
   OBR.onReady(async () => {

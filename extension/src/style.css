@@ -509,3 +509,290 @@ button:focus-visible {
 .pill[data-state="pausa"]::before {
   background: var(--wait);
 }
+
+/* Fichas */
+.sheets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Fica presa no topo ao rolar a ficha, para trocar de personagem sem voltar lá em cima. */
+.chips {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0 6px;
+  background: var(--panel-bg, #1e1e1e);
+}
+
+.chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+
+.chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sheet-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.sheet-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.sheet-sub {
+  margin: 0;
+  color: var(--muted);
+}
+
+.sheet-pending,
+.sheet-problems {
+  padding: 6px 8px;
+  border-left: 3px solid var(--wait);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--wait) 10%, transparent);
+}
+
+.sheet-problems {
+  border-left-color: var(--fail);
+  background: color-mix(in srgb, var(--fail) 10%, transparent);
+}
+
+.sheet-pending ul,
+.sheet-problems ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.vitals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.vitals label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.sheet input.num {
+  width: 52px;
+}
+
+.vitals input[type="text"] {
+  width: 64px;
+}
+
+.attrs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.sheet,
+.sheets {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+/* A lista rola; os blocos da ficha não encolhem para caber na altura. */
+.sheets > *,
+.sheet > *,
+.picker > * {
+  flex: none;
+}
+
+.attr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.attr .num {
+  width: 100%;
+  max-width: 48px;
+  text-align: center;
+}
+
+.attr-name {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.attr-mod {
+  font-weight: 600;
+}
+
+.attr-save {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.attr-save.prof {
+  color: var(--accent);
+}
+
+.sheet-section h3 {
+  margin: 4px 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.sheet-section h4 {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sheet-section p {
+  margin: 2px 0;
+}
+
+ul.plain {
+  margin: 0;
+  padding-left: 16px;
+}
+
+details.feature summary,
+details.spell summary {
+  cursor: pointer;
+}
+
+details.spell summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.spell-body {
+  padding: 4px 0 6px 12px;
+  font-size: 13px;
+}
+
+.spell-meta {
+  color: var(--muted);
+}
+
+.slots {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.slot-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.slot {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: transparent;
+}
+
+.slot.spent {
+  background: var(--accent);
+  opacity: 0.45;
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.pick-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.pick-row input {
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  flex: none;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.pick-row details {
+  flex: 1;
+  min-width: 0;
+}
+
+.picker-count {
+  font-weight: 600;
+}
+
+button.wide {
+  width: 100%;
+  margin-top: 6px;
+}
+
+button.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sheet textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.sheet textarea.raw {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+.sheet .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.sheet[data-readonly="true"] {
+  opacity: 0.9;
+}

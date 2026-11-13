@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { MesaError, errorMessage } from "./errors.js";
-import { TOKEN_LAYERS, displayName, footprint } from "./grid.js";
+import { TOKEN_LAYERS, bounds, displayName, footprint } from "./grid.js";
 import type { GridInfo, RawItem } from "./protocol.js";
 
 /** Lado maior da imagem devolvida: bom para o Claude ler sem gastar demais. */
@@ -99,14 +99,15 @@ function overlaySvg(
 
 /**
  * Mostra o mapa da cena (ou um pedaço dele) com a grade numerada e os tokens.
- * Só funciona com mapa sem rotação em grade quadrada.
+ * Funciona em grade quadrada, com o mapa girado de 90 em 90 graus (ou sem rotação).
  */
 export async function renderMap(items: RawItem[], grid: GridInfo, wanted?: MapArea): Promise<MapView> {
   const maps = items.filter((item) => item.layer === "MAP" && item.image && item.grid);
   if (maps.length === 0) throw new MesaError("MAP_UNAVAILABLE", "A cena não tem uma imagem de mapa.");
   // O maior mapa da cena é o principal.
   const map = maps.sort((a, b) => footprint(b, grid).w * footprint(b, grid).h - footprint(a, grid).w * footprint(a, grid).h)[0]!;
-  if (map.rotation % 360 !== 0) throw new MesaError("MAP_UNAVAILABLE", "O mapa está girado; ainda não sei desenhar a grade nele.");
+  const rotation = (((map.rotation || 0) % 360) + 360) % 360;
+  if (rotation % 90 !== 0) throw new MesaError("MAP_UNAVAILABLE", `O mapa está girado ${rotation}°; só sei desenhar a grade em mapas girados de 90 em 90 graus.`);
 
   const mapFp = footprint(map, grid);
   const area: MapArea = wanted
@@ -121,27 +122,23 @@ export async function renderMap(items: RawItem[], grid: GridInfo, wanted?: MapAr
     throw new MesaError("BAD_REQUEST", `Essa área fica fora do mapa (colunas ${mapFp.col} a ${mapFp.col + mapFp.w - 1}, linhas ${mapFp.row} a ${mapFp.row + mapFp.h - 1}).`);
   }
 
-  // Pixels da imagem original por casa, e onde a casa (0, 0) da cena cai nela.
-  const k = map.grid!.dpi / grid.dpi; // px da imagem por px da cena (escala 1)
-  const scaleX = Math.abs(map.scale.x) || 1;
-  const scaleY = Math.abs(map.scale.y) || 1;
-  const sceneLeft = map.position.x - map.grid!.offset.x * (grid.dpi / map.grid!.dpi) * scaleX;
-  const sceneTop = map.position.y - map.grid!.offset.y * (grid.dpi / map.grid!.dpi) * scaleY;
-  const toImgX = (sceneX: number) => ((sceneX - sceneLeft) / scaleX) * k;
-  const toImgY = (sceneY: number) => ((sceneY - sceneTop) / scaleY) * k;
-
-  const source = await download(map.image!.url);
+  // Gira a imagem como o Owlbear mostra; aí o retângulo da cena (bounds) cobre a imagem
+  // inteira e a conversão de pixel da cena para pixel da imagem é só uma escala.
+  const raw = await download(map.image!.url);
+  const source = rotation ? await sharp(raw).rotate(rotation).toBuffer() : raw;
   const meta = await sharp(source).metadata();
-  const imgW = meta.width ?? map.image!.width;
-  const imgH = meta.height ?? map.image!.height;
-  // O Owlbear pode guardar a imagem num tamanho diferente do declarado.
-  const fx = imgW / map.image!.width;
-  const fy = imgH / map.image!.height;
+  const b = bounds(map, grid);
+  const imgW = meta.width ?? Math.round(b.x1 - b.x0);
+  const imgH = meta.height ?? Math.round(b.y1 - b.y0);
+  const fx = imgW / (b.x1 - b.x0);
+  const fy = imgH / (b.y1 - b.y0);
+  const toImgX = (sceneX: number) => (sceneX - b.x0) * fx;
+  const toImgY = (sceneY: number) => (sceneY - b.y0) * fy;
 
-  const left = Math.max(0, Math.round(toImgX(area.col * grid.dpi) * fx));
-  const top = Math.max(0, Math.round(toImgY(area.row * grid.dpi) * fy));
-  const right = Math.min(imgW, Math.round(toImgX((area.col + area.w) * grid.dpi) * fx));
-  const bottom = Math.min(imgH, Math.round(toImgY((area.row + area.h) * grid.dpi) * fy));
+  const left = Math.max(0, Math.round(toImgX(area.col * grid.dpi)));
+  const top = Math.max(0, Math.round(toImgY(area.row * grid.dpi)));
+  const right = Math.min(imgW, Math.round(toImgX((area.col + area.w) * grid.dpi)));
+  const bottom = Math.min(imgH, Math.round(toImgY((area.row + area.h) * grid.dpi)));
 
   const ratio = Math.min(1, MAX_SIDE / Math.max(right - left, bottom - top));
   const outW = Math.round((right - left) * ratio);
