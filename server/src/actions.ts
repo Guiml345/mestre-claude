@@ -21,7 +21,7 @@ import type { AnnounceVariant, Announcement, Combat, FogState, GridInfo, Invento
 import type { RollLogEntry } from "./rolllog.js";
 import { renderMap, type MapArea, type MapView } from "./mapview.js";
 import { CATALOG_SIZE, iconUrl, loadCatalog, resolveIcon, searchCatalog } from "./catalog.js";
-import { activeCampaignDir, createCampaign, describeCampaign, getActiveCampaign, listCampaigns, setActiveCampaign } from "./campaigns.js";
+import { activeCampaignDir, campaignForRoom, createCampaign, describeCampaign, getActiveCampaign, linkRoom, listCampaigns, setActiveCampaign, slugify, unlinkRoom } from "./campaigns.js";
 import { canRecreate, matchTokens, readSnapshot, writeSnapshot, type SavedToken, type SceneSnapshot } from "./cenas.js";
 import path from "node:path";
 import { addCombatants, changeCombatant, describeCombat, findCombatant, nextTurn, startCombat, type CombatantChange, type NewCombatant } from "./combat.js";
@@ -63,13 +63,13 @@ function roleLabel(role: string): string {
   return role === "GM" ? "mestre" : "jogador";
 }
 
-async function loadScene(ctx: ActionContext): Promise<{ grid: GridInfo; items: RawItem[] }> {
+async function loadScene(ctx: ActionContext): Promise<{ grid: GridInfo; items: RawItem[]; roomId: string }> {
   const state = await ctx.table.call("getState", undefined, requestOptions(ctx));
   if (!state.sceneReady || !state.grid) {
     throw new MesaError("NO_SCENE", "Nenhuma cena aberta no Owlbear Rodeo. Abra uma cena e tente de novo.");
   }
   const items = await ctx.table.call("getItems", undefined, requestOptions(ctx));
-  return { grid: state.grid, items };
+  return { grid: state.grid, items, roomId: state.roomId };
 }
 
 // ---------------------------------------------------------------- status_mesa
@@ -123,6 +123,10 @@ export async function statusMesa(ctx: ActionContext): Promise<string> {
   }
   if (state.hidden) {
     lines.push("Aviso: a aba do Owlbear está em segundo plano; o navegador pode atrasar as respostas. Deixe-a visível durante o jogo.");
+  }
+  if (ctx.campaignsRoot) {
+    const link = await describeRoomLink(ctx, ctx.campaignsRoot, state.roomId || null).catch(() => "");
+    if (link) lines.push(`Campanha: ${link}`);
   }
   lines.push(
     info.listening
@@ -1029,9 +1033,28 @@ export async function inventario(ctx: ActionContext, args: InventarioArgs): Prom
 // ------------------------------------------------------------------ campanha
 
 export interface CampanhaArgs {
-  /** listar: todas; ver: a ativa; ativar: escolhe a campanha; criar: nova pasta a partir do modelo. */
-  acao: "listar" | "ver" | "ativar" | "criar";
+  /**
+   * listar: todas; ver: a ativa; ativar: escolhe a campanha; criar: nova pasta a partir do modelo;
+   * vincular: liga a campanha (padrão: a ativa) à sala do Owlbear aberta; desvincular: desfaz.
+   */
+  acao: "listar" | "ver" | "ativar" | "criar" | "vincular" | "desvincular";
   nome?: string;
+}
+
+/** Id da sala do Owlbear conectada, ou null se não houver mesa. */
+async function currentRoom(ctx: ActionContext): Promise<string | null> {
+  const state = await ctx.table.call("getState", undefined, { waitTableMs: 0, timeoutMs: 5_000 }).catch(() => null);
+  return state?.roomId || null;
+}
+
+/** Diz a qual campanha a sala aberta pertence e se é a ativa. Vazio se não há mesa. */
+async function describeRoomLink(ctx: ActionContext, root: string, roomId: string | null): Promise<string> {
+  if (!roomId) return "";
+  const linked = await campaignForRoom(root, roomId);
+  const active = await getActiveCampaign(root);
+  if (!linked) return 'Esta sala do Owlbear não está vinculada a nenhuma campanha (use campanha com acao "vincular").';
+  if (linked.slug === active) return `Esta sala do Owlbear é da campanha "${linked.slug}", que está ativa.`;
+  return `Atenção: esta sala do Owlbear é da campanha "${linked.slug}", mas a ativa é "${active}". Ative "${linked.slug}" antes de jogar, ou as rolagens e a cena vão para a pasta errada.`;
 }
 
 export async function campanha(ctx: ActionContext, args: CampanhaArgs): Promise<string> {
@@ -1040,14 +1063,33 @@ export async function campanha(ctx: ActionContext, args: CampanhaArgs): Promise<
   switch (args.acao) {
     case "listar": {
       const all = await listCampaigns(root);
-      return all.length ? all.map(describeCampaign).join("\n") : "Nenhuma campanha ainda. Use acao criar.";
+      const room = await currentRoom(ctx);
+      return all.length
+        ? all.map((c) => `${describeCampaign(c)}${room && c.sala === room ? " (É A DESTA SALA)" : ""}`).join("\n")
+        : "Nenhuma campanha ainda. Use acao criar.";
     }
     case "ver": {
       const active = await getActiveCampaign(root);
       const info = (await listCampaigns(root)).find((c) => c.slug === active);
-      return info
-        ? `Campanha ativa: ${describeCampaign(info)}.\nLeia ${path.join(info.dir, "resumo.md")} e as fichas antes de mestrar; no fim da sessão, atualize o resumo.`
-        : `Campanha ativa: "${active}" (pasta ainda não existe; as rolagens criam a pasta ao gravar).`;
+      const link = await describeRoomLink(ctx, root, await currentRoom(ctx));
+      return [
+        info
+          ? `Campanha ativa: ${describeCampaign(info)}.\nLeia ${path.join(info.dir, "resumo.md")} e as fichas antes de mestrar; no fim da sessão, atualize o resumo.`
+          : `Campanha ativa: "${active}" (pasta ainda não existe; as rolagens criam a pasta ao gravar).`,
+        link,
+      ].filter(Boolean).join("\n");
+    }
+    case "vincular": {
+      const room = await currentRoom(ctx);
+      if (!room) throw new MesaError("NO_TABLE", "Nenhuma mesa conectada: abra a sala no Owlbear para vincular.");
+      const slug = args.nome?.trim() ? (await setActiveCampaign(root, args.nome)).slug : await getActiveCampaign(root);
+      const unlinked = await linkRoom(root, slug, room, ctx.now?.());
+      return `Campanha "${slug}" vinculada a esta sala do Owlbear${args.nome?.trim() ? " e ativada" : ""}.${unlinked.length ? ` Antes a sala era de: ${unlinked.join(", ")} (desvinculadas).` : ""}`;
+    }
+    case "desvincular": {
+      const slug = args.nome?.trim() ? (await listCampaigns(root)).find((c) => c.slug === slugify(args.nome!))?.slug : await getActiveCampaign(root);
+      if (!slug) throw new MesaError("BAD_REQUEST", `Não achei a campanha "${args.nome}".`);
+      return (await unlinkRoom(root, slug)) ? `Campanha "${slug}" não está mais vinculada a nenhuma sala.` : `A campanha "${slug}" não tinha sala vinculada.`;
     }
     case "criar": {
       if (!args.nome?.trim()) throw new MesaError("BAD_REQUEST", "Diga o nome da campanha.");
@@ -1057,7 +1099,11 @@ export async function campanha(ctx: ActionContext, args: CampanhaArgs): Promise<
     case "ativar": {
       if (!args.nome?.trim()) throw new MesaError("BAD_REQUEST", "Diga qual campanha.");
       const info = await setActiveCampaign(root, args.nome);
-      return `Campanha ativa agora: ${describeCampaign(info)}.\nLeia ${path.join(info.dir, "resumo.md")} e as fichas antes de mestrar.${info.temCena ? " Há uma cena salva: veja com restaurar_cena (previa: true)." : ""}`;
+      const link = await describeRoomLink(ctx, root, await currentRoom(ctx));
+      return [
+        `Campanha ativa agora: ${describeCampaign(info)}.\nLeia ${path.join(info.dir, "resumo.md")} e as fichas antes de mestrar.${info.temCena ? " Há uma cena salva: veja com restaurar_cena (previa: true)." : ""}`,
+        link,
+      ].filter(Boolean).join("\n");
     }
   }
 }
@@ -1183,7 +1229,7 @@ export interface SalvarCenaArgs {
 
 /** Grava na pasta da campanha onde cada token está, o combate, a névoa e o inventário. */
 export async function salvarCena(ctx: ActionContext, args: SalvarCenaArgs = {}): Promise<string> {
-  const { grid, items } = await loadScene(ctx);
+  const { grid, items, roomId } = await loadScene(ctx);
   requireSquare(grid);
   const tokens: SavedToken[] = sceneTokens(items).map((item) => {
     const fp = footprint(item, grid);
@@ -1207,6 +1253,7 @@ export async function salvarCena(ctx: ActionContext, args: SalvarCenaArgs = {}):
     versao: 1,
     salvoEm: (ctx.now?.() ?? new Date()).toISOString(),
     ...(args.motivo?.trim() ? { motivo: args.motivo.trim() } : {}),
+    ...(roomId ? { sala: roomId } : {}),
     mapa: mapName(items),
     tokens,
     combate,
@@ -1245,8 +1292,14 @@ export async function restaurarCena(ctx: ActionContext, args: RestaurarCenaArgs 
   }
   if (!snap) return `Não há cena salva${args.anterior ? " anterior" : ""} nesta campanha (${dir}).`;
 
-  const { grid, items } = await loadScene(ctx);
+  const { grid, items, roomId } = await loadScene(ctx);
   requireSquare(grid);
+  if (snap.sala && roomId && snap.sala !== roomId && !args.forcar) {
+    throw new MesaError(
+      "BAD_REQUEST",
+      "A cena salva é de outra sala do Owlbear. Abra a sala certa (veja com campanha qual sala é desta campanha) ou use forcar: true.",
+    );
+  }
   const currentMap = mapName(items);
   if (snap.mapa && currentMap !== snap.mapa && !args.forcar) {
     throw new MesaError(

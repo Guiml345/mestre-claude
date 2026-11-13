@@ -176,8 +176,8 @@ async function main(): Promise<void> {
         return;
       }
       case "campanha": {
-        // npm run mesa -- campanha listar|ver|ativar <nome>|criar <nome>
-        const acao = (rest[0] ?? "ver") as "listar" | "ver" | "ativar" | "criar";
+        // npm run mesa -- campanha listar|ver|ativar <nome>|criar <nome>|vincular [nome]|desvincular [nome]
+        const acao = (rest[0] ?? "ver") as "listar" | "ver" | "ativar" | "criar" | "vincular" | "desvincular";
         console.log(await campanha(ctx, { acao, nome: rest.slice(1).join(" ") || undefined }));
         return;
       }

@@ -74,9 +74,9 @@ export function registerTools(server: McpServer, ctx: ActionContext): void {
     {
       title: "Campanha",
       description:
-        "Cada campanha é uma pasta em campanhas/<nome>/ com resumo.md (história e onde pararam), fichas/ e rolagens.jsonl. `ver` mostra a ativa; `listar` mostra todas; `ativar` escolhe a campanha da sessão (as rolagens passam a ser gravadas nela); `criar` faz uma pasta nova a partir do modelo. Leia o resumo e as fichas da campanha ativa com a ferramenta de leitura de arquivos.",
+        "Cada campanha é uma pasta em campanhas/<nome>/ com resumo.md (história e onde pararam), fichas/, rolagens.jsonl e cena.json. `ver` mostra a ativa; `listar` mostra todas e marca a da sala aberta; `ativar` escolhe a campanha da sessão (as rolagens passam a ser gravadas nela); `criar` faz uma pasta nova a partir do modelo; `vincular` liga a campanha (com `nome`, essa, e a ativa; sem, a ativa) à sala do Owlbear aberta, e `desvincular` desfaz. Uma sala tem uma campanha só. Leia o resumo e as fichas da campanha ativa com a ferramenta de leitura de arquivos.",
       inputSchema: {
-        acao: z.enum(["listar", "ver", "ativar", "criar"]),
+        acao: z.enum(["listar", "ver", "ativar", "criar", "vincular", "desvincular"]),
         nome: z.string().max(60).optional().describe("Nome da campanha (para ativar ou criar)."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },

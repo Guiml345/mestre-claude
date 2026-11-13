@@ -10,8 +10,9 @@ Siga as regras de mestre do `CLAUDE.md`. Fale em português do Brasil.
 
 1. **Escolher a campanha.**
    - Se veio um nome junto do comando (`$ARGUMENTS`), use essa campanha e pule para o passo 2.
+   - Se não, chame `mcp__mesa__status_mesa` primeiro. Se a linha "Campanha:" disser que a sala aberta é de uma campanha, ative essa sem perguntar e diga qual foi.
    - Se não, chame `mcp__mesa__campanha` com `acao: "listar"` e pergunte com `AskUserQuestion` qual continuar: uma opção por campanha (no máximo 4; as que estão mais à frente na lista primeiro, `teste` por último), com a descrição tirada do "Onde paramos" do resumo de cada uma. Inclua "Campanha nova" se houver espaço; se escolherem, pergunte o nome e use `acao: "criar"`.
-   - Ative a escolhida com `mcp__mesa__campanha` e `acao: "ativar"`.
+   - Ative a escolhida com `mcp__mesa__campanha` e `acao: "ativar"`. Se a sala não tiver campanha vinculada, pergunte se vincula esta sala à campanha escolhida (`acao: "vincular"`), para as próximas sessões já começarem nela.
 
 2. **Carregar a história**, tudo junto numa resposta só: leia `campanhas/<nome>/resumo.md` e todas as fichas em `campanhas/<nome>/fichas/` (ignore `MODELO.md`), e chame `mcp__mesa__status_mesa` e `mcp__mesa__listar_tokens`.
 

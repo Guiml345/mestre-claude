@@ -115,6 +115,15 @@ describe("salvar_cena e restaurar_cena", () => {
     assert.match(await restaurarCena(ctx, { forcar: true }), /Restaurando/);
   });
 
+  it("recusa cena de outra sala, a menos que force", async () => {
+    const { table, ctx } = setup();
+    await salvarCena(ctx);
+    assert.equal(JSON.parse(await readFile(path.join(dir, "cena.json"), "utf8")).sala, "sala-teste");
+    table.state.roomId = "outra-sala";
+    await assert.rejects(restaurarCena(ctx), (err: unknown) => err instanceof MesaError && /outra sala do Owlbear/.test(err.message));
+    assert.match(await restaurarCena(ctx, { forcar: true }), /Restaurando/);
+  });
+
   it("diz quando não há cena salva", async () => {
     const { ctx } = setup();
     assert.match(await restaurarCena(ctx), /Não há cena salva/);

@@ -36,6 +36,8 @@ export interface SceneSnapshot {
   versao: 1;
   salvoEm: string;
   motivo?: string;
+  /** Id da sala do Owlbear onde foi salva (para não restaurar na sala errada). */
+  sala?: string;
   /** Nome do mapa da cena (para não restaurar no mapa errado). */
   mapa: string | null;
   tokens: SavedToken[];

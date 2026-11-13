@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MesaError } from "./errors.js";
 import { normalize } from "./grid.js";
@@ -9,6 +9,8 @@ import { normalize } from "./grid.js";
  */
 
 const ACTIVE_FILE = ".ativa";
+/** Sala do Owlbear vinculada à campanha. */
+const ROOM_FILE = "sala.json";
 const TEMPLATE_DIR = "_modelo";
 /** Usada quando nenhuma campanha foi escolhida, para nada se misturar com as de verdade. */
 export const FALLBACK_CAMPAIGN = "teste";
@@ -20,6 +22,8 @@ export interface CampaignInfo {
   temResumo: boolean;
   /** Há uma cena salva (cena.json) para restaurar. */
   temCena: boolean;
+  /** Id da sala do Owlbear vinculada, se houver. */
+  sala: string | null;
   fichas: string[];
   rolagens: number;
 }
@@ -58,6 +62,7 @@ async function describe(root: string, slug: string, active: string): Promise<Cam
     ativa: slug === active,
     temResumo: await exists(path.join(dir, "resumo.md")),
     temCena: await exists(path.join(dir, "cena.json")),
+    sala: await readRoom(dir),
     fichas,
     rolagens: log.split("\n").filter(Boolean).length,
   };
@@ -96,12 +101,57 @@ export async function setActiveCampaign(root: string, name: string): Promise<Cam
   return { ...found, ativa: true };
 }
 
+async function readRoom(dir: string): Promise<string | null> {
+  const text = await readFile(path.join(dir, ROOM_FILE), "utf8").catch(() => null);
+  if (text === null) return null;
+  try {
+    const data = JSON.parse(text) as { sala?: unknown };
+    return typeof data.sala === "string" && data.sala ? data.sala : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Campanha vinculada a uma sala do Owlbear, se houver. */
+export async function campaignForRoom(root: string, roomId: string): Promise<CampaignInfo | null> {
+  if (!roomId) return null;
+  return (await listCampaigns(root)).find((c) => c.sala === roomId) ?? null;
+}
+
+/**
+ * Vincula a campanha a uma sala. Uma sala fica com uma campanha só: as outras
+ * vinculadas a ela perdem o vínculo. Devolve as que perderam.
+ */
+export async function linkRoom(root: string, slug: string, roomId: string, now = new Date()): Promise<string[]> {
+  if (!roomId) throw new MesaError("BAD_REQUEST", "A mesa não informou o id da sala.");
+  const all = await listCampaigns(root);
+  const target = all.find((c) => c.slug === slug);
+  if (!target) throw new MesaError("BAD_REQUEST", `A campanha "${slug}" não existe.`);
+  const unlinked: string[] = [];
+  for (const c of all) {
+    if (c.slug !== slug && c.sala === roomId) {
+      await rm(path.join(c.dir, ROOM_FILE), { force: true });
+      unlinked.push(c.slug);
+    }
+  }
+  await writeFile(path.join(target.dir, ROOM_FILE), `${JSON.stringify({ sala: roomId, vinculadaEm: now.toISOString() }, null, 2)}\n`, "utf8");
+  return unlinked;
+}
+
+export async function unlinkRoom(root: string, slug: string): Promise<boolean> {
+  const dir = path.join(root, slug);
+  const had = (await readRoom(dir)) !== null;
+  await rm(path.join(dir, ROOM_FILE), { force: true });
+  return had;
+}
+
 export function describeCampaign(c: CampaignInfo): string {
   const parts = [
     `"${c.slug}"${c.ativa ? " (ativa)" : ""}: pasta ${c.dir}`,
     c.temResumo ? "resumo.md" : "sem resumo",
     c.fichas.length ? `fichas: ${c.fichas.join(", ")}` : "sem fichas",
     c.temCena ? "cena salva (cena.json)" : "sem cena salva",
+    c.sala ? "vinculada a uma sala do Owlbear" : "sem sala vinculada",
     `${c.rolagens} rolagem(ns) registradas`,
   ];
   return parts.join("; ");
