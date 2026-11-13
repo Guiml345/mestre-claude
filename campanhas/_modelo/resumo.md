@@ -25,4 +25,5 @@ Escreva à mão ou peça ao Claude: "atualiza o resumo da campanha" no fim da se
 
 ## Onde paramos
 
-(a última cena, exatamente onde os personagens estão e o que estavam fazendo)
+(a última cena, exatamente onde os personagens estão e o que estavam fazendo;
+a posição dos tokens, o combate e a névoa ficam em cena.json, gravado com salvar_cena)

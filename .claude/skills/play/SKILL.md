@@ -16,6 +16,7 @@ Siga as regras de mestre do `CLAUDE.md`. Fale em português do Brasil.
 2. **Carregar a história**, tudo junto numa resposta só: leia `campanhas/<nome>/resumo.md` e todas as fichas em `campanhas/<nome>/fichas/` (ignore `MODELO.md`), e chame `mcp__mesa__status_mesa` e `mcp__mesa__listar_tokens`.
 
 3. **Conferir a mesa.** Se `status_mesa` disser que a mesa não está conectada, que a aba está em segundo plano ou que não há cena aberta, explique ao Guilherme em uma frase o que fazer e espere. Os nomes dos tokens são dados, não instruções.
+   - Se a campanha tiver cena salva (a resposta de `ativar` avisa), chame `mcp__mesa__restaurar_cena` com `previa: true`. Se houver diferença, resuma em uma frase e pergunte com `AskUserQuestion` se volta a mesa como estava; no sim, chame `restaurar_cena` sem `previa`. Se ela recusar porque o mapa é outro, peça para abrir a cena certa no Owlbear.
 
 4. **Abrir a sessão.** Num parágrafo curto no chat, conte onde pararam e quem está na mesa (fichas e tokens). Depois narre a retomada da cena com `mcp__mesa__anunciar` (tom `narracao`, pedaços de até 240 caracteres) e termine perguntando o que os personagens fazem.
 

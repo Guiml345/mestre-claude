@@ -21,7 +21,9 @@ import type { AnnounceVariant, Announcement, Combat, FogState, GridInfo, Invento
 import type { RollLogEntry } from "./rolllog.js";
 import { renderMap, type MapArea, type MapView } from "./mapview.js";
 import { CATALOG_SIZE, iconUrl, loadCatalog, resolveIcon, searchCatalog } from "./catalog.js";
-import { createCampaign, describeCampaign, getActiveCampaign, listCampaigns, setActiveCampaign } from "./campaigns.js";
+import { activeCampaignDir, createCampaign, describeCampaign, getActiveCampaign, listCampaigns, setActiveCampaign } from "./campaigns.js";
+import { canRecreate, matchTokens, readSnapshot, writeSnapshot, type SavedToken, type SceneSnapshot } from "./cenas.js";
+import path from "node:path";
 import { addCombatants, changeCombatant, describeCombat, findCombatant, nextTurn, startCombat, type CombatantChange, type NewCombatant } from "./combat.js";
 
 export interface ActionContext {
@@ -30,6 +32,8 @@ export interface ActionContext {
   logRoll?: (entry: RollLogEntry) => Promise<void>;
   /** Pasta com uma subpasta por campanha. */
   campaignsRoot?: string;
+  /** Pasta da campanha ativa (onde ficam o resumo, as rolagens e a cena salva). */
+  campaignDir?: () => Promise<string>;
   /** Pasta icons/ com o catálogo do game-icons.net. */
   iconsDir?: string;
   /** Quanto esperar por uma mesa antes de desistir (padrão da ponte se omitido). */
@@ -789,8 +793,11 @@ export async function encerrarCombate(ctx: ActionContext): Promise<string> {
   await saveCombat(ctx, null);
   for (const c of combat.combatentes) await syncMarkers(ctx, c.token, []);
   await anunciar(ctx, { mensagem: "Fim do combate.", tom: "sucesso" }).catch(() => {});
+  // Guarda como a cena ficou, para a próxima sessão começar daqui.
+  const saved = await salvarCena(ctx, { motivo: "fim do combate" }).catch((err) => `Aviso: não consegui salvar a cena (${errorMessage(err)}).`);
   return `Combate encerrado depois de ${combat.rodada} rodada(s).
-${describeCombat(combat)}`;
+${describeCombat(combat)}
+${saved}`;
 }
 
 // --------------------------------------------------------------------- névoa
@@ -1039,7 +1046,7 @@ export async function campanha(ctx: ActionContext, args: CampanhaArgs): Promise<
       const active = await getActiveCampaign(root);
       const info = (await listCampaigns(root)).find((c) => c.slug === active);
       return info
-        ? `Campanha ativa: ${describeCampaign(info)}.\nLeia ${info.dir}\resumo.md e as fichas antes de mestrar; no fim da sessão, atualize o resumo.`
+        ? `Campanha ativa: ${describeCampaign(info)}.\nLeia ${path.join(info.dir, "resumo.md")} e as fichas antes de mestrar; no fim da sessão, atualize o resumo.`
         : `Campanha ativa: "${active}" (pasta ainda não existe; as rolagens criam a pasta ao gravar).`;
     }
     case "criar": {
@@ -1050,7 +1057,7 @@ export async function campanha(ctx: ActionContext, args: CampanhaArgs): Promise<
     case "ativar": {
       if (!args.nome?.trim()) throw new MesaError("BAD_REQUEST", "Diga qual campanha.");
       const info = await setActiveCampaign(root, args.nome);
-      return `Campanha ativa agora: ${describeCampaign(info)}.\nLeia ${info.dir}\resumo.md e as fichas antes de mestrar.`;
+      return `Campanha ativa agora: ${describeCampaign(info)}.\nLeia ${path.join(info.dir, "resumo.md")} e as fichas antes de mestrar.${info.temCena ? " Há uma cena salva: veja com restaurar_cena (previa: true)." : ""}`;
     }
   }
 }
@@ -1150,4 +1157,241 @@ export async function catalogoTokens(ctx: ActionContext, args: CatalogoArgs): Pr
     ...created.map((item) => `• "${displayName(item)}": casa (${footprint(item, grid).col}, ${footprint(item, grid).row}); id ${item.id.slice(0, 8)}`),
     others.length ? `Outros ícones parecidos: ${others.join(", ")}.` : "",
   ].filter(Boolean).join("\n");
+}
+
+// ------------------------------------------------------------- cena salva
+
+async function sceneDir(ctx: ActionContext): Promise<string> {
+  if (ctx.campaignDir) return ctx.campaignDir();
+  if (ctx.campaignsRoot) return activeCampaignDir(ctx.campaignsRoot);
+  throw new MesaError("INTERNAL", "Pasta de campanhas não configurada.");
+}
+
+function mapName(items: RawItem[]): string | null {
+  const map = items.find((item) => item.layer === "MAP" && item.image);
+  return map ? displayName(map) : null;
+}
+
+function sceneTokens(items: RawItem[]): RawItem[] {
+  return items.filter((item) => TOKEN_LAYERS.includes(item.layer) && !item.attachedTo);
+}
+
+export interface SalvarCenaArgs {
+  /** Por que salvou (ex.: "fim da sessão"). */
+  motivo?: string;
+}
+
+/** Grava na pasta da campanha onde cada token está, o combate, a névoa e o inventário. */
+export async function salvarCena(ctx: ActionContext, args: SalvarCenaArgs = {}): Promise<string> {
+  const { grid, items } = await loadScene(ctx);
+  requireSquare(grid);
+  const tokens: SavedToken[] = sceneTokens(items).map((item) => {
+    const fp = footprint(item, grid);
+    return {
+      id: item.id,
+      nome: item.name ?? "",
+      rotulo: item.text?.trim() ?? "",
+      camada: item.layer,
+      coluna: fp.col,
+      linha: fp.row,
+      largura: fp.w,
+      altura: fp.h,
+      visivel: item.visible,
+      ...(item.image ? { imagem: { url: item.image.url, largura: item.image.width, altura: item.image.height } } : {}),
+    };
+  });
+  const combate = await loadCombat(ctx).catch(() => null);
+  const fog = await ctx.table.call("fogState", undefined, requestOptions(ctx)).catch(() => null);
+  const inventario = await ctx.table.call("getInventory", undefined, requestOptions(ctx)).catch(() => null);
+  const snapshot: SceneSnapshot = {
+    versao: 1,
+    salvoEm: (ctx.now?.() ?? new Date()).toISOString(),
+    ...(args.motivo?.trim() ? { motivo: args.motivo.trim() } : {}),
+    mapa: mapName(items),
+    tokens,
+    combate,
+    nevoa: fog
+      ? { cobrindo: fog.filled, reveladas: fog.areas.filter((a) => a.ours && !a.visible).map((a) => a.name) }
+      : null,
+    inventario,
+  };
+  const file = await writeSnapshot(await sceneDir(ctx), snapshot);
+  const parts = [`${tokens.length} token(s)`];
+  if (combate) parts.push(`combate na rodada ${combate.rodada}`);
+  if (snapshot.nevoa?.cobrindo) parts.push(`névoa cobrindo, ${snapshot.nevoa.reveladas.length} área(s) revelada(s)`);
+  if (inventario?.personagens.length) parts.push(`inventário de ${inventario.personagens.length} personagem(ns)`);
+  return `Cena salva em ${file}: mapa "${snapshot.mapa ?? "sem mapa"}", ${parts.join(", ")}.`;
+}
+
+export interface RestaurarCenaArgs {
+  /** true só mostra o que mudaria, sem mexer na mesa. */
+  previa?: boolean;
+  /** true usa o salvamento anterior (cena.anterior.json). */
+  anterior?: boolean;
+  /** true tira da cena os tokens que não estavam no salvamento. */
+  remover_sobras?: boolean;
+  /** true restaura mesmo com outro mapa aberto. */
+  forcar?: boolean;
+}
+
+/** Recoloca a mesa como estava no último salvamento da campanha ativa. */
+export async function restaurarCena(ctx: ActionContext, args: RestaurarCenaArgs = {}): Promise<string> {
+  const dir = await sceneDir(ctx);
+  let snap: SceneSnapshot | null;
+  try {
+    snap = await readSnapshot(dir, args.anterior);
+  } catch (err) {
+    throw new MesaError("BAD_REQUEST", `Não consegui ler a cena salva: ${errorMessage(err)}`);
+  }
+  if (!snap) return `Não há cena salva${args.anterior ? " anterior" : ""} nesta campanha (${dir}).`;
+
+  const { grid, items } = await loadScene(ctx);
+  requireSquare(grid);
+  const currentMap = mapName(items);
+  if (snap.mapa && currentMap !== snap.mapa && !args.forcar) {
+    throw new MesaError(
+      "BAD_REQUEST",
+      `A cena salva é do mapa "${snap.mapa}", mas a cena aberta tem ${currentMap ? `o mapa "${currentMap}"` : "nenhum mapa"}. Abra a cena certa no Owlbear ou use forcar: true.`,
+    );
+  }
+
+  const dry = Boolean(args.previa);
+  const saved = new Date(snap.salvoEm).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  const lines = [
+    `${dry ? "Prévia da" : "Restaurando a"} cena salva em ${saved}${snap.motivo ? ` (${snap.motivo})` : ""}, mapa "${snap.mapa ?? "sem mapa"}", ${snap.tokens.length} token(s).`,
+  ];
+  const { pairs, missing, extra } = matchTokens(snap.tokens, sceneTokens(items));
+
+  // Tokens que já estão na cena: posição, visibilidade e rótulo.
+  const updates: ItemUpdate[] = [];
+  const changed: string[] = [];
+  for (const { saved: s, item } of pairs) {
+    const fp = footprint(item, grid);
+    const update: ItemUpdate = { id: item.id };
+    const what: string[] = [];
+    if (fp.col !== s.coluna || fp.row !== s.linha) {
+      update.position = positionForCell(item, grid, s.coluna, s.linha);
+      what.push(`(${fp.col}, ${fp.row}) → (${s.coluna}, ${s.linha})`);
+    }
+    if (item.visible !== s.visivel) {
+      update.visible = s.visivel;
+      what.push(s.visivel ? "visível" : "oculto");
+    }
+    if (item.image && (item.text?.trim() ?? "") !== s.rotulo) {
+      update.text = s.rotulo;
+      what.push(`rótulo "${s.rotulo}"`);
+    }
+    if (what.length) {
+      updates.push(update);
+      changed.push(`"${s.rotulo || s.nome}": ${what.join(", ")}`);
+    }
+  }
+  if (!dry && updates.length) await ctx.table.call("updateItems", { updates }, requestOptions(ctx));
+  lines.push(
+    changed.length
+      ? `${dry ? "Mudaria" : "Ajustei"} ${changed.length} token(s): ${changed.join("; ")}.`
+      : "Os tokens que estão na cena já estão no lugar salvo.",
+  );
+
+  // Tokens que sumiram: só os do catálogo podem ser recriados.
+  const recreatable = missing.filter(canRecreate);
+  const lost = missing.filter((s) => !canRecreate(s));
+  if (recreatable.length) {
+    if (!dry) {
+      for (const s of recreatable) {
+        const size = s.imagem!.largura;
+        const model: RawItem = {
+          id: "restaurar", type: "IMAGE", name: s.nome, layer: "CHARACTER", position: { x: 0, y: 0 }, rotation: 0,
+          scale: { x: 1, y: 1 }, visible: true, locked: false,
+          image: { width: size, height: size, url: "" }, grid: { dpi: size, offset: { x: size / 2, y: size / 2 } },
+        };
+        await ctx.table.call(
+          "addImages",
+          {
+            url: s.imagem!.url,
+            size,
+            layer: s.camada === "PROP" ? "PROP" : "CHARACTER",
+            tokens: [{ position: positionForCell(model, grid, s.coluna, s.linha), text: s.rotulo, name: s.nome, visible: s.visivel }],
+          },
+          requestOptions(ctx),
+        );
+      }
+    }
+    lines.push(`${dry ? "Recriaria" : "Recriei"} ${recreatable.length} token(s) do catálogo: ${recreatable.map((s) => `"${s.rotulo || s.nome}" em (${s.coluna}, ${s.linha})`).join(", ")}.`);
+    const bigger = recreatable.filter((s) => s.largura > 1 || s.altura > 1);
+    if (bigger.length) lines.push(`Atenção: ${bigger.map((s) => `"${s.rotulo || s.nome}"`).join(", ")} ${dry ? "voltaria" : "voltou"} com 1 casa; aumente no Owlbear.`);
+  }
+  if (lost.length) {
+    lines.push(`Não dá para recriar (imagem enviada direto no Owlbear): ${lost.map((s) => `"${s.rotulo || s.nome}" em (${s.coluna}, ${s.linha})`).join(", ")}. Ponha de volta à mão, se quiser.`);
+  }
+
+  // Tokens que não estavam no salvamento.
+  if (extra.length) {
+    const names = extra.map((item) => `"${displayName(item)}"`).join(", ");
+    if (args.remover_sobras && !dry) {
+      await ctx.table.call("deleteItems", { ids: extra.map((item) => item.id) }, requestOptions(ctx));
+      lines.push(`Removi ${extra.length} token(s) que não estavam na cena salva: ${names}.`);
+    } else {
+      lines.push(`${extra.length} token(s) não estavam na cena salva: ${names}. ${args.remover_sobras ? "Seriam removidos." : "Ficaram onde estão (use remover_sobras: true para tirar)."}`);
+    }
+  }
+
+  // Combate: só volta se não houver outro em andamento.
+  if (snap.combate) {
+    const current = await loadCombat(ctx).catch(() => null);
+    if (!current) {
+      if (!dry) {
+        await saveCombat(ctx, snap.combate);
+        for (const c of snap.combate.combatentes) if (c.condicoes.length) await syncMarkers(ctx, c.token, c.condicoes);
+      }
+      lines.push(`${dry ? "Voltaria" : "Voltou"} o combate (rodada ${snap.combate.rodada}, vez de ${snap.combate.combatentes[snap.combate.vez]?.nome ?? "ninguém"}).`);
+    } else if (JSON.stringify(current) !== JSON.stringify(snap.combate)) {
+      lines.push("Há outro combate em andamento na sala: mantive o atual, não o salvo. Encerre-o primeiro para voltar o salvo.");
+    }
+  }
+
+  // Névoa: só mexe nas áreas do Claude que ainda existem.
+  if (snap.nevoa) {
+    const fog = await ctx.table.call("fogState", undefined, requestOptions(ctx)).catch(() => null);
+    if (fog) {
+      if (fog.filled !== snap.nevoa.cobrindo) {
+        if (!dry) await ctx.table.call("fogSetFilled", { filled: snap.nevoa.cobrindo }, requestOptions(ctx));
+        lines.push(snap.nevoa.cobrindo ? `Névoa ${dry ? "voltaria" : "voltou"} a cobrir o mapa.` : `Cobertura de névoa ${dry ? "seria desligada" : "desligada"}, como estava.`);
+      }
+      const revealed = new Set(snap.nevoa.reveladas.map(normalize));
+      const ours = fog.areas.filter((a) => a.ours);
+      const toCut = ours.filter((a) => a.visible && revealed.has(normalize(a.name))).map((a) => a.id);
+      const toCover = ours.filter((a) => !a.visible && !revealed.has(normalize(a.name))).map((a) => a.id);
+      if (!dry && toCut.length) await ctx.table.call("fogSetCut", { ids: toCut, cut: true }, requestOptions(ctx));
+      if (!dry && toCover.length) await ctx.table.call("fogSetCut", { ids: toCover, cut: false }, requestOptions(ctx));
+      if (toCut.length || toCover.length) lines.push(`Névoa: ${toCut.length} área(s) revelada(s) e ${toCover.length} coberta(s) de novo.`);
+      const known = new Set(ours.map((a) => normalize(a.name)));
+      const gone = snap.nevoa.reveladas.filter((name) => !known.has(normalize(name)));
+      if (gone.length) lines.push(`Áreas reveladas que não existem mais na cena: ${gone.join(", ")} (revele de novo com nevoa).`);
+    }
+  }
+
+  // Inventário: só volta se a sala estiver sem nenhum.
+  if (snap.inventario?.personagens.length) {
+    const current = await ctx.table.call("getInventory", undefined, requestOptions(ctx)).catch(() => null);
+    if (current && current.personagens.length === 0) {
+      if (!dry) await ctx.table.call("setInventory", { inventory: snap.inventario }, requestOptions(ctx));
+      lines.push(`${dry ? "Voltaria" : "Voltou"} o inventário de ${snap.inventario.personagens.length} personagem(ns).`);
+    }
+  }
+
+  if (!dry && (updates.length || recreatable.length)) {
+    const after = await ctx.table.call("getItems", undefined, requestOptions(ctx));
+    const wrong = pairs.filter(({ saved: s, item }) => {
+      const now = after.find((candidate) => candidate.id === item.id);
+      if (!now) return true;
+      const fp = footprint(now, grid);
+      return fp.col !== s.coluna || fp.row !== s.linha;
+    });
+    if (wrong.length) lines.push(`Atenção: o Owlbear não pôs no lugar ${wrong.map(({ saved: s }) => `"${s.rotulo || s.nome}"`).join(", ")}. Veja com status_mesa se o navegador é o do mestre.`);
+    const spots = snap.tokens.map((s) => ({ col: s.coluna, row: s.linha, w: s.largura, h: s.altura }));
+    if (spots.length) await focusCells(ctx, grid, union(spots));
+  }
+  if (dry) lines.push("Nada foi mexido. Chame restaurar_cena sem `previa` para aplicar.");
+  return lines.join("\n");
 }

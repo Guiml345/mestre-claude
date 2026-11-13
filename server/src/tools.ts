@@ -23,6 +23,8 @@ import {
   moverToken,
   rolar,
   statusMesa,
+  salvarCena,
+  restaurarCena,
   type ActionContext,
 } from "./actions.js";
 import { errorMessage } from "./errors.js";
@@ -80,6 +82,37 @@ export function registerTools(server: McpServer, ctx: ActionContext): void {
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     (args) => run(() => campanha(ctx, args)),
+  );
+
+  server.registerTool(
+    "salvar_cena",
+    {
+      title: "Salvar cena",
+      description:
+        "Grava em campanhas/<nome>/cena.json, na campanha ativa, onde cada token está (casa, rótulo, visibilidade, imagem), o combate em andamento, a névoa e o inventário, para a próxima sessão começar dali. O salvamento anterior fica em cena.anterior.json. encerrar_combate já salva sozinho; salve também no fim da sessão, quando atualizar o \"Onde paramos\" do resumo.",
+      inputSchema: {
+        motivo: z.string().max(80).optional().describe('Por que salvou, ex.: "fim da sessão".'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    (args) => run(() => salvarCena(ctx, args)),
+  );
+
+  server.registerTool(
+    "restaurar_cena",
+    {
+      title: "Restaurar cena",
+      description:
+        "Recoloca a mesa como estava no cena.json da campanha ativa: move os tokens que estão na cena para a casa salva (e acerta rótulo e visibilidade), recria os que sumiram se forem do catálogo de tokens, volta o combate (se não houver outro), a névoa e o inventário (se a sala estiver sem). Recusa se o mapa aberto for outro. Use `previa: true` antes para ver o que mudaria.",
+      inputSchema: {
+        previa: z.boolean().optional().describe("true só mostra o que mudaria, sem mexer na mesa."),
+        anterior: z.boolean().optional().describe("true usa o salvamento anterior (cena.anterior.json)."),
+        remover_sobras: z.boolean().optional().describe("true tira da cena os tokens que não estavam no salvamento."),
+        forcar: z.boolean().optional().describe("true restaura mesmo com outro mapa aberto."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    (args) => run(() => restaurarCena(ctx, args)),
   );
 
   server.registerTool(
@@ -279,7 +312,7 @@ export function registerTools(server: McpServer, ctx: ActionContext): void {
     "encerrar_combate",
     {
       title: "Encerrar combate",
-      description: "Termina o combate e tira a ordem de iniciativa do painel.",
+      description: "Termina o combate, tira a ordem de iniciativa do painel e salva a cena (como salvar_cena).",
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     () => run(() => encerrarCombate(ctx)),

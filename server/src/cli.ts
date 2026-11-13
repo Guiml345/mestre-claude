@@ -25,6 +25,8 @@ import {
   moverToken,
   rolar,
   statusMesa,
+  salvarCena,
+  restaurarCena,
   type ActionContext,
 } from "./actions.js";
 import { Bridge } from "./bridge.js";
@@ -48,6 +50,8 @@ const USAGE = `Mestre Claude ${VERSION} - comandos de teste
   npm run mesa -- escutar [minutos]              espera até alguém digitar (padrão 120 min) e sai
   npm run mesa -- criar <modelo> [qtd] [rótulo]  cria cópias de um token perto dele
   npm run mesa -- remover <token>                tira um token da cena
+  npm run mesa -- salvar [motivo]                grava a cena em campanhas/<ativa>/cena.json
+  npm run mesa -- restaurar [previa] [anterior] [sobras] [forcar]  volta a cena salva
   npm run mesa -- mapa <arquivo.jpg> [token raio] salva o mapa com a grade numerada`;
 
 function integer(text: string | undefined, name: string): number {
@@ -77,7 +81,8 @@ async function main(): Promise<void> {
     log: (message) => console.error(`[mesa] ${message}`),
   });
   // A extensão tenta reconectar a cada poucos segundos, então a linha de comando espera um pouco por ela.
-  const ctx: ActionContext = { table: bridge, logRoll: createRollLogger(config.campaignDir ?? (() => activeCampaignDir(config.campaignsRoot))), campaignsRoot: config.campaignsRoot, iconsDir: config.iconsDir, waitTableMs: 10_000 };
+  const campaignDir = async () => config.campaignDir ?? activeCampaignDir(config.campaignsRoot);
+  const ctx: ActionContext = { table: bridge, logRoll: createRollLogger(campaignDir), campaignsRoot: config.campaignsRoot, campaignDir, iconsDir: config.iconsDir, waitTableMs: 10_000 };
 
   try {
     await bridge.ensure();
@@ -232,6 +237,13 @@ async function main(): Promise<void> {
         return;
       case "remover":
         console.log(await removerToken(ctx, { token: required(rest[0], "token") }));
+        return;
+      case "salvar":
+        console.log(await salvarCena(ctx, { motivo: rest.join(" ") || undefined }));
+        return;
+      case "restaurar":
+        // npm run mesa -- restaurar [previa] [anterior] [sobras] [forcar]
+        console.log(await restaurarCena(ctx, { previa: rest.includes("previa"), anterior: rest.includes("anterior"), remover_sobras: rest.includes("sobras"), forcar: rest.includes("forcar") }));
         return;
       case "aguardar":
         console.log(await aguardarJogadores(ctx, { segundos: rest[0] ? integer(rest[0], "segundos") : 50 }));

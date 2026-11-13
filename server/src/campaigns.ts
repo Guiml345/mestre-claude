@@ -18,6 +18,8 @@ export interface CampaignInfo {
   dir: string;
   ativa: boolean;
   temResumo: boolean;
+  /** Há uma cena salva (cena.json) para restaurar. */
+  temCena: boolean;
   fichas: string[];
   rolagens: number;
 }
@@ -55,6 +57,7 @@ async function describe(root: string, slug: string, active: string): Promise<Cam
     dir,
     ativa: slug === active,
     temResumo: await exists(path.join(dir, "resumo.md")),
+    temCena: await exists(path.join(dir, "cena.json")),
     fichas,
     rolagens: log.split("\n").filter(Boolean).length,
   };
@@ -98,6 +101,7 @@ export function describeCampaign(c: CampaignInfo): string {
     `"${c.slug}"${c.ativa ? " (ativa)" : ""}: pasta ${c.dir}`,
     c.temResumo ? "resumo.md" : "sem resumo",
     c.fichas.length ? `fichas: ${c.fichas.join(", ")}` : "sem fichas",
+    c.temCena ? "cena salva (cena.json)" : "sem cena salva",
     `${c.rolagens} rolagem(ns) registradas`,
   ];
   return parts.join("; ");
